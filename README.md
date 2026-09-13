@@ -1,5 +1,7 @@
 # Canon
 
+[![npm version](https://img.shields.io/npm/v/canon-ds?color=B4309F&logo=npm)](https://www.npmjs.com/package/canon-ds)
+
 **Connect Canon to your agent. Shape the design in Studio.**
 
 Canon is an open-source design system for apps built with coding agents. It provides shared tokens, components, page layouts, a visual Studio and focused instructions that keep interface work consistent.
