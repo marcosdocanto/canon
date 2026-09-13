@@ -1,0 +1,74 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing stable version tag; also select this tag as the workflow ref'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-canon-ds
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'marcosdocanto/canon'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Validate release tag
+        env:
+          CANON_RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$CANON_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'The tag must be a stable version such as v0.1.1.' >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" != "refs/tags/$CANON_RELEASE_TAG" ]]; then
+            echo 'Dispatch this workflow from the same tag as its tag input so provenance matches the source.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Use npm 11 for trusted publishing
+        run: npm install --global npm@11
+      - name: Verify package version and source
+        env:
+          CANON_RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const tag = process.env.CANON_RELEASE_TAG;
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          const tagged = execFileSync('git', ['rev-parse', '--verify', `refs/tags/${tag}^{commit}`], { encoding: 'utf8' }).trim();
+          assert.equal(pkg.name, 'canon-ds');
+          assert.equal(tag, `v${pkg.version}`, 'The tag must match package.json version.');
+          assert.equal(head, tagged, 'Checkout must match the selected tag.');
+          assert.equal(head, process.env.GITHUB_SHA, 'The workflow event must identify the released commit.');
+          console.log(`Verified ${pkg.name}@${pkg.version} at ${head}`);
+          NODE
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ci
+      - run: npm run build
+      - run: npm run release:check
+      - name: Publish with trusted publisher authentication
+        run: npm publish --ignore-scripts --access public --provenance

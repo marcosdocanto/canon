@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="{{theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Conecte o Canon ao seu agente com um prompt. Use o Studio para explorar componentes e ajustar o design do seu projeto.">
+<title>Canon · Documentação</title>
+{{font-link}}
+<style>{{styles}}</style>
+</head>
+<body>
+<a class="doc-skip" href="#doc-main">Pular para o conteúdo</a>
+<header class="doc-header">
+  <div class="doc-header-inner">
+    <a class="doc-brand" href="#primeiro-projeto" aria-label="Canon — início da documentação"><span class="doc-mark" aria-hidden="true"></span><strong>canon</strong><span class="doc-brand-label">docs</span></a>
+    <div class="doc-header-actions">
+      <button class="doc-icon-button" id="doc-theme" type="button" aria-label="Alternar tema claro e escuro" title="Alternar tema">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="doc-theme-moon" d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/><g class="doc-theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4m-14.2 0 1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg>
+      </button>
+      <a class="doc-studio-link" href="./preview.html">Abrir Studio <span aria-hidden="true">↗</span></a>
+    </div>
+  </div>
+</header>
+<div class="doc-shell">
+  <nav class="doc-nav" id="doc-nav" aria-label="Documentação">{{navigation}}</nav>
+  <main class="doc-main" id="doc-main" tabindex="-1">
+    <article class="doc-article" id="primeiro-projeto" data-label="Conectar">
+      <div class="doc-eyebrow">Comece aqui</div>
+      <h1>Conecte o Canon ao seu projeto</h1>
+      <p class="doc-lead">Copie o prompt e cole no Claude ou no Codex que você já está usando, na conversa do seu projeto. O agente conecta o design e abre o Studio para você.</p>
+      <div class="doc-start">
+        <blockquote class="doc-start-intent" id="doc-connect-prompt">Use o Canon como design system deste projeto.
+Leia e siga: __CANON_CONNECTION_URL__</blockquote>
+        <button class="doc-start-copy" id="doc-start-copy" type="button"><span>Copiar prompt de conexão</span><span aria-hidden="true">↗</span></button>
+        <p class="doc-start-status" id="doc-start-status" role="status">Funciona em projetos novos ou em andamento e preserva um Canon já conectado.</p>
+      </div>
+      <h2 id="primeiro-projeto-aplicar">Continue de onde parou</h2>
+      <p>O agente importa o design salvo neste Studio, integra os estilos no app existente e abre um Studio próprio do projeto. Se o projeto já usa Canon, ele mantém a fonte e as personalizações atuais.</p>
+      <p>{{connection-customization}}</p>
+      <details class="doc-details">
+        <summary>Já tenho o MCP conectado</summary>
+        <p>Use o mesmo prompt de conexão. O agente preserva a configuração existente, atualiza as referências e abre o Studio vinculado ao projeto.</p>
+      </details>
+    </article>
+
+    <article class="doc-article" id="studio" data-label="Studio" hidden>
+      <div class="doc-eyebrow">Seu design system, à vista</div>
+      <h1>Explore e ajuste no Studio</h1>
+      <p class="doc-lead">{{studio-intro}}</p>
+      <a class="doc-studio-link doc-studio-cta" href="./preview.html">Abrir Studio <span aria-hidden="true">↗</span></a>
+      <ol class="doc-steps">
+        <li>
+          <h2 id="studio-explorar">Explore o catálogo</h2>
+          <p>Use a busca ou as categorias do catálogo. Em <strong>Example</strong>, escolha a variante ou etapa que quer ver. Alterne entre <strong>Desktop</strong> e <strong>Mobile</strong>; use <strong>100%</strong> para conferir os detalhes em tamanho real e <strong>Fit</strong> para ver o conjunto. Links e formulários dos exemplos mantêm você no Studio.</p>
+        </li>
+        <li>
+          <h2 id="studio-personalizar">Personalize o visual</h2>
+          <p>No Studio do projeto, abra <strong>Customize → Style</strong> para ajustar cores, fontes, formas e espaçamento. Os componentes acompanham suas escolhas. Confira também o tema claro e escuro.</p>
+        </li>
+        <li>
+          <h2 id="studio-inspecionar">Ajuste uma peça</h2>
+          <p>Com o editor aberto, clique em um componente para abrir <strong>Inspect</strong>. Escolha a parte e confira <strong>Apply changes to</strong>: você pode editar o estilo compartilhado ou uma variante específica. Os ajustes ficam agrupados em layout, tipografia, cores e efeitos. <strong>Reset</strong> remove apenas a alteração da variante escolhida. <strong>Direction</strong> guarda a orientação visual que o agente recebe.</p>
+        </li>
+        <li>
+          <h2 id="studio-salvar">Salve e continue com o agente</h2>
+          <p>{{studio-save}}</p>
+        </li>
+      </ol>
+      <details class="doc-details">
+        <summary id="studio-desfazer">Quero desfazer uma alteração</summary>
+        <p>Use <strong>Undo</strong> no editor. Se a mudança já tiver sido salva, clique em <strong>Save</strong> novamente para gravar a reversão.</p>
+      </details>
+      <p class="doc-hint">O visual aparece no app na atualização normal da prévia. Para mudar a estrutura de uma tela ou seu comportamento, continue a conversa com o agente.</p>
+    </article>
+  </main>
+  <footer class="doc-footer"><span>Canon · {{name}}</span>{{public-links}}<span>v{{version}}</span></footer>
+</div>
+<div class="doc-announcer" id="doc-announcer" role="status" aria-live="polite"></div>
+<script>{{script}}</script>
+</body>
+</html>

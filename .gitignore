@@ -1,0 +1,13 @@
+node_modules
+*.log
+.DS_Store
+examples/*/design/dist
+/lib/
+/*.tgz
+/site/
+/.canon-site-build/
+/docs/superpowers/
+/examples/default/design/
+.env
+.env.*
+!.env.example

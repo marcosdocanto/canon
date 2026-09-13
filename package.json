@@ -1,0 +1,54 @@
+{
+  "name": "canon-ds",
+  "version": "0.1.0",
+  "description": "A design system for apps built with coding agents: shared tokens, components, layouts, CSS and React exports, focused instructions, lint and MCP tools.",
+  "homepage": "https://marcosdocanto.github.io/canon/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marcosdocanto/canon.git"
+  },
+  "bugs": {
+    "url": "https://github.com/marcosdocanto/canon/issues"
+  },
+  "keywords": ["design-system", "coding-agents", "mcp", "studio", "design-tokens", "css", "react", "vibe-coding"],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "bin": {
+    "canon": "bin/canon.js"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "test": "node scripts/test.mjs",
+    "test:browser": "node scripts/test.mjs --browser",
+    "test:ci": "npm run typecheck && npm test && npm run test:browser",
+    "typecheck": "tsc --project tsconfig.json",
+    "build": "node scripts/build.mjs",
+    "build:site": "node scripts/build-site.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "prepublishOnly": "npm run test:ci && npm run release:check",
+    "prepack": "npm run build --silent",
+    "build:example": "node bin/canon.js init Canon --design examples/default/design"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "playwright": "1.63.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "5.9.3"
+  }
+}
