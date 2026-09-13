@@ -97,7 +97,7 @@ export const card: ComponentSpec = {
     'Do not nest default cards inside default cards. Inside a card use ghost cards, dividers or plain groups.',
     'A collection of similar items is a list or a table inside one card, not a grid of cards. Cards for a grid only when each item is visual (media) or the number is ≤ 6.',
     'Padding is a prop, never ad-hoc: md 24px by default, sm 16px in dense grids, lg 32px for hero and settings cards, none when a table, list or media fills the card.',
-    'Interactive cards contain no other interactive elements (no buttons inside a link) and show a stronger edge on hover; selected cards (radio cards) carry data-selected and a leading selection rule.',
+    'Interactive cards contain no other interactive elements (no buttons inside a link) and show a stronger edge on hover; selected cards (radio cards) carry data-selected and use the selected outline and surface tokens.',
     'Footers hold meta or the pagination / actions row, on a hairline, on a subtle surface.',
   ],
   a11y: [

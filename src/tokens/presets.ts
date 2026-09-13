@@ -41,11 +41,11 @@ export const PRESETS: Record<string, Preset> = {
       overrides: CANON_OVERRIDES,
     },
     direction: {
-      summary: 'Canon keeps a white canvas, neutral grey surfaces and familiar product layouts. Its character lives in the details: Vera’s orchid pink for actions, DM Sans, flat controls and compact corners. IBM Plex Mono labels technical details; a fine leading rule marks selection.',
+      summary: 'Canon keeps a white canvas, neutral grey surfaces and familiar product layouts. Its character lives in the details: Vera’s orchid pink for actions, DM Sans, flat controls and compact corners. IBM Plex Mono labels technical details; surface and text color mark navigation selection.',
       principles: [
         'Large surfaces stay white or neutral grey. Pink is a small action or selection detail; do not tint the page background.',
         'Controls are 40px with 14px medium text and 6px corners. Use a flat fill or a single outline, without a bevel or resting shadow.',
-        'Cards have 10px corners and a hairline. Hover strengthens the edge; selection adds a leading rule. Reserve elevation for floating layers.',
+        'Cards have 10px corners and a hairline. Hover and selection strengthen the outline. Reserve elevation for floating layers.',
         'DM Sans for reading and headings; IBM Plex Mono for compact section labels, IDs and code. Product headings are 22–34px, with short, useful copy.',
         'Navigation distinguishes hover from selection: quiet hover, a persistent line or solid segment for the current view. Do not turn every label into a pill.',
         'Featured icons use a simple outlined frame with a small corner cut; avoid concentric rings. Use one only when it helps identify the block.',
