@@ -1,7 +1,7 @@
 import type { ComponentSpec } from '../types.ts';
 import { FOCUS_RING, STATE, ex, ICON, typeStyle } from './_shared.ts';
 
-// Resting surfaces stay flat; a leading rule communicates selection.
+// Resting surfaces stay flat; a subtle fill communicates selection.
 
 const HAIRLINE = '{border.width.thin} solid {color.border-default}';
 const ring = (color: string) => `inset 0 0 0 1px ${color}`;
@@ -16,7 +16,7 @@ export const card: ComponentSpec = {
   name: 'Card',
   slug: 'card',
   category: 'layout',
-  description: 'A bounded surface for one thing: an entity, a form section, a stat. A neutral surface, a fine outline and compact corners, with a leading rule on selected cards.',
+  description: 'A bounded surface for one thing: an entity, a form section, a stat. A neutral surface, a fine outline and compact corners, with a subtle fill on selected cards.',
   usage: 'Group related content that stands alone (a customer, a settings section, a KPI). Do not use cards as a layout grid for everything; lists and tables are better for collections of similar rows. Use variant="interactive" only when the whole card is one link/action. Put a CardHeader first when the card needs a title with actions.',
   anatomy: [
     { part: 'root', element: 'section', description: 'The surface: surface fill, fine outline, token-defined corners; padding via the padding prop.' },
@@ -80,7 +80,6 @@ export const card: ComponentSpec = {
     },
   },
   extraCss: `
-.cn-card[data-selected]::before { content: ""; position: absolute; inset-block: {space.4}; inset-inline-start: 0; width: {border.width.thick}; background: {color.bg-action}; }
 .cn-card[data-padding="md"] .cn-card__header + .cn-card__body { padding-top: {space.5}; }
 .cn-card[data-padding="sm"] .cn-card__header + .cn-card__body { padding-top: {space.4}; }
 .cn-card[data-padding="lg"] .cn-card__header + .cn-card__body { padding-top: {space.6}; }
@@ -88,7 +87,7 @@ export const card: ComponentSpec = {
   examples: [
     ex('Default with header and footer', `<section class="cn-card" data-variant="default" data-padding="md" style="max-width:400px"><header class="cn-card__header"><div><h3 class="cn-card__title">Lumen website redesign</h3><p class="cn-card__description">Marketing site · Due Sep 19</p></div><div class="cn-card__actions"><button type="button" class="cn-icon-button" data-variant="ghost" data-size="sm" data-shape="square" aria-label="More actions">${ICON.dots.replace('cn-icon', 'cn-icon-button__icon')}</button></div></header><div class="cn-card__body"><p class="cn-text-body-md">12 tasks, 4 in review. Sofia Almeida owns the design track, Daniel Costa the build.</p></div><footer class="cn-card__footer">Updated 2h ago by Maya Chen</footer></section>`, 'Flat surface, fine outline, 24px padding; the footer sits on a hairline.'),
     ex('With a CardHeader and a table-like body', `<section class="cn-card" data-variant="default" data-padding="none" style="max-width:480px"><header class="cn-card-header" data-variant="default" data-size="md"><div class="cn-card-header__content"><h2 class="cn-card-header__title">Team members</h2><p class="cn-card-header__description">Manage your team and their permissions.</p></div><div class="cn-card-header__actions">${btn('Add user', 'primary')}</div></header><div class="cn-card__body" style="padding:var(--cn-space-6)"><p class="cn-text-body-md">6 members · 1 invitation pending.</p></div><footer class="cn-card__footer">${btn('Previous', 'outline')}<span style="margin-inline:auto">Page 1 of 3</span>${btn('Next', 'outline')}</footer></section>`, 'padding="none" so the CardHeader hairline spans the card; the body sets its own 24px padding.'),
-    ex('Interactive and selected', `<div style="display:flex;gap:var(--cn-space-6);flex-wrap:wrap"><a href="#" class="cn-card" data-variant="interactive" data-padding="md" style="width:280px"><div class="cn-card__body"><h3 class="cn-card__title">Open the workspace</h3><p class="cn-card__description">12 projects · 3 waiting for you</p></div></a><a href="#" class="cn-card" data-variant="interactive" data-padding="md" data-selected style="width:280px"><div class="cn-card__body"><h3 class="cn-card__title">Business plan</h3><p class="cn-card__description">$2,900 / month · 15 seats</p></div></a></div>`, 'Hover strengthens the outline; selection adds an action-tinted surface and a leading rule.'),
+    ex('Interactive and selected', `<div style="display:flex;gap:var(--cn-space-6);flex-wrap:wrap"><a href="#" class="cn-card" data-variant="interactive" data-padding="md" style="width:280px"><div class="cn-card__body"><h3 class="cn-card__title">Open the workspace</h3><p class="cn-card__description">12 projects · 3 waiting for you</p></div></a><a href="#" class="cn-card" data-variant="interactive" data-padding="md" data-selected style="width:280px"><div class="cn-card__body"><h3 class="cn-card__title">Business plan</h3><p class="cn-card__description">$2,900 / month · 15 seats</p></div></a></div>`, 'Hover strengthens the outline; selection adds an action-tinted surface.'),
     ex('Sizes of padding', `<div style="display:flex;gap:var(--cn-space-6);flex-wrap:wrap;align-items:flex-start"><section class="cn-card" data-variant="default" data-padding="sm" style="width:200px"><div class="cn-card__body cn-text-body-md">sm · 16px</div></section><section class="cn-card" data-variant="default" data-padding="md" style="width:200px"><div class="cn-card__body cn-text-body-md">md · 24px</div></section><section class="cn-card" data-variant="default" data-padding="lg" style="width:200px"><div class="cn-card__body cn-text-body-md">lg · 32px</div></section></div>`),
     ex('Outlined, elevated and ghost', `<div style="display:flex;gap:var(--cn-space-6);flex-wrap:wrap;align-items:flex-start"><section class="cn-card" data-variant="outlined" data-padding="sm" style="width:220px"><div class="cn-card__body cn-text-body-md">Outlined: ring only, no fill or shadow.</div></section><section class="cn-card" data-variant="elevated" data-padding="sm" style="width:220px"><div class="cn-card__body cn-text-body-md">Elevated: shadow-md on a same-color canvas.</div></section><section class="cn-card" data-variant="ghost" data-padding="sm" style="width:220px"><div class="cn-card__body cn-text-body-md">Ghost: a quiet gray-50 group inside another card.</div></section></div>`),
   ],

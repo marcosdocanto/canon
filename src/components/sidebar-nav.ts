@@ -1,7 +1,7 @@
 import type { ComponentSpec } from '../types.ts';
 import { ex, ICON, typeStyle } from './_shared.ts';
 
-// A compact reading rail with persistent leading markers on current destinations.
+// A compact reading rail with subtle fills on current destinations.
 
 const TRANSITION_FAST = {
   'transition-property': 'background-color, color, box-shadow',
@@ -24,7 +24,7 @@ export const sidebarNav: ComponentSpec = {
   name: 'SidebarNav',
   slug: 'sidebar-nav',
   category: 'navigation',
-  description: 'A grouped navigation rail: a 280px column of 36px link rows (14px semibold, 20px icon, radius 6) grouped with subheadings or dividers, a quiet hover fill and a leading mark on the current destination, with count badges and collapsible children.',
+  description: 'A grouped navigation rail: a 280px column of 36px link rows (14px semibold, 20px icon, radius 6) grouped with subheadings or dividers, a quiet hover fill and action-colored text on the current destination, with count badges and collapsible children.',
   usage: 'Use as the nav list of a Sidebar or on its own for the second level of navigation inside a product area (settings sections, a workspace\'s views). Items are answers to what the user wants to do, grouped by job, never a mirror of the data model. For 3–6 top-level destinations use the Topbar instead.',
   anatomy: [
     { part: 'root', element: 'nav', description: 'The column: 280px wide, 20 × 16px padding, groups stacked. Has aria-label.' },
@@ -46,12 +46,12 @@ export const sidebarNav: ComponentSpec = {
     variant: {
       values: ['default', 'inset'],
       default: 'default',
-      description: 'default = transparent on the surface; hovered and current rows get the gray-50 fill (the default). inset = the whole nav is a gray-50 rail with a hairline on its trailing edge, and the current item uses a surface fill and a leading action-colored rule.',
+      description: 'default = transparent on the surface; hovered and current rows get the gray-50 fill (the default). inset = the whole nav is a gray-50 rail with a hairline on its trailing edge, and the current item uses a surface fill and action-colored text.',
     },
   },
   states: {
     hover: { selector: ' .cn-sidebar-nav__item:hover', description: 'Pointer over an item (lives on the ITEM, not the root): gray-50 fill, gray-800 label, gray-500 icon.', markup: 'native :hover on the item' },
-    current: { selector: ' .cn-sidebar-nav__item[aria-current="page"]', description: 'The destination the user is on: gray-50 fill (gray-100 when hovered), ink label, darker icon (inset: white pill with ring and shadow-xs). Exactly one per nav.', markup: 'aria-current="page" on the item' },
+    current: { selector: ' .cn-sidebar-nav__item[aria-current="page"]', description: 'The destination the user is on: gray-50 fill (gray-100 when hovered), ink label, darker icon (inset: surface fill with action-colored text). Exactly one per nav.', markup: 'aria-current="page" on the item' },
     focus: { selector: ' .cn-sidebar-nav__item:focus-visible', description: 'Keyboard focus on an item: the token-defined focus ring around the row.', markup: 'native :focus-visible on the item' },
     disabled: { selector: ' .cn-sidebar-nav__item[aria-disabled="true"]', description: 'Destination not available on this plan or not yet set up. 50% opacity, no hover; keep the label so the user knows it exists.', markup: 'aria-disabled="true" on the item (omit href)' },
   },
@@ -135,12 +135,11 @@ export const sidebarNav: ComponentSpec = {
   extraCss: `
 .cn-sidebar-nav__item:hover:not([aria-disabled="true"]) { background-color: {color.bg-subtle}; color: {color.fg-default}; }
 .cn-sidebar-nav__item:hover:not([aria-disabled="true"]) .cn-sidebar-nav__icon { color: {color.fg-muted}; }
-.cn-sidebar-nav__item[aria-current="page"] { background-color: {color.bg-action-subtle}; color: {color.fg-action}; box-shadow: inset 2px 0 0 {color.bg-action}; }
-[dir="rtl"] .cn-sidebar-nav__item[aria-current="page"] { box-shadow: inset -2px 0 0 {color.bg-action}; }
+.cn-sidebar-nav__item[aria-current="page"] { background-color: {color.bg-action-subtle}; color: {color.fg-action}; }
 .cn-sidebar-nav__item[aria-current="page"]:hover { background-color: {color.bg-muted}; }
 .cn-sidebar-nav__item[aria-current="page"] .cn-sidebar-nav__icon { color: inherit; }
 .cn-sidebar-nav[data-variant="inset"] .cn-sidebar-nav__item:hover:not([aria-disabled="true"]) { background-color: {color.bg-muted}; }
-.cn-sidebar-nav[data-variant="inset"] .cn-sidebar-nav__item[aria-current="page"] { background-color: {color.bg-surface}; box-shadow: inset 2px 0 0 {color.bg-action}; }
+.cn-sidebar-nav[data-variant="inset"] .cn-sidebar-nav__item[aria-current="page"] { background-color: {color.bg-surface}; }
 .cn-sidebar-nav__item:focus-visible { outline: none; box-shadow: {shadow.focus}; z-index: {z.raised}; }
 .cn-sidebar-nav__item[aria-disabled="true"] { opacity: {opacity.disabled}; cursor: not-allowed; pointer-events: none; }
 .cn-sidebar-nav__item[data-level="2"] { padding-inline-start: {space.10}; padding-inline-end: {space.3}; }
@@ -153,7 +152,7 @@ details.cn-sidebar-nav__group > .cn-sidebar-nav__item + .cn-sidebar-nav__item { 
     ex('Simple list', `<nav class="cn-sidebar-nav" data-variant="default" data-size="md" aria-label="Main">${group('sn-main', null, MAIN())}</nav>`, '36px rows, 14px semibold, 20px icons; Dashboard is current (gray-50), Tasks carries a 22px count badge.'),
     ex('Sections with subheadings', `<nav class="cn-sidebar-nav" data-variant="default" data-size="md" aria-label="Main">${group('sn-general', 'General', item('Home', 'home') + item('Dashboard', 'calendar', ' aria-current="page"') + item('Tasks', 'check', '', '10'))}${group('sn-ws', 'Workspace', item('Projects', 'copy') + item('Reporting', 'inbox') + item('Users', 'user'))}${group('sn-acct', 'Account', item('Support', 'info') + item('Settings', 'settings'))}</nav>`, 'Groups 16px apart, each with a 12px semibold subheading.'),
     ex('Dividers and a collapsible parent', `<nav class="cn-sidebar-nav" data-variant="default" data-size="md" aria-label="Main">${group('sn-d1', null, item('Home', 'home') + item('Dashboard', 'calendar'))}<hr class="cn-sidebar-nav__divider">${group('sn-d2', null, parent('Projects', 'copy', true, item('All projects', null, ' data-level="2" aria-current="page"') + item('Shared with me', null, ' data-level="2"') + item('Archived', null, ' data-level="2"')) + item('Reporting', 'inbox') + item('Users', 'user'))}<hr class="cn-sidebar-nav__divider">${group('sn-d3', null, item('Support', 'info') + item('Settings', 'settings'))}</nav>`, 'A <details> group with a <summary> row: the chevron flips when open; child rows are indented to 40px.'),
-    ex('Inset rail, small', `<nav class="cn-sidebar-nav" data-variant="inset" data-size="sm" aria-label="Settings">${group('sn-i1', 'Workspace', item('General', 'settings') + item('Members', 'user', ' aria-current="page"') + item('Billing', 'calendar'))}${group('sn-i2', 'Data', item('Imports', 'inbox') + item('Integrations', 'external') + item('API keys', 'copy'))}</nav>`, 'The rail is gray-50 with a trailing hairline; the current item uses a leading action-colored mark. 32px rows.'),
+    ex('Inset rail, small', `<nav class="cn-sidebar-nav" data-variant="inset" data-size="sm" aria-label="Settings">${group('sn-i1', 'Workspace', item('General', 'settings') + item('Members', 'user', ' aria-current="page"') + item('Billing', 'calendar'))}${group('sn-i2', 'Data', item('Imports', 'inbox') + item('Integrations', 'external') + item('API keys', 'copy'))}</nav>`, 'The rail is gray-50 with a trailing hairline; the current item uses a surface fill and action-colored text. 32px rows.'),
     ex('Disabled item and truncation', `<nav class="cn-sidebar-nav" data-variant="default" data-size="md" aria-label="Reports">${group('sn-r', 'Reports', item('Pipeline', 'arrow', ' aria-current="page"') + item('Enterprise procurement pipeline, Q3 review', 'calendar') + `<a class="cn-sidebar-nav__item" aria-disabled="true" title="Available on the Business plan">${icon('spark')}<span class="cn-sidebar-nav__label">Attribution</span></a>`)}</nav>`, 'Long labels truncate; the disabled item keeps its name and explains itself in a title or Tooltip.'),
   ],
   rules: [

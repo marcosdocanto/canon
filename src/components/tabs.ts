@@ -35,7 +35,7 @@ export const tabs: ComponentSpec = {
   name: 'Tabs',
   slug: 'tabs',
   category: 'navigation',
-  description: 'A tablist that switches between views of the same object, in several emphasis levels: underline (2px brand bar on a hairline), button-brand (solid action segment), button-gray (gray-50 pill), button-border (white pill in a gray track) and button-minimal (ringed white pill in a gray track); line is the vertical underline. Labels are semibold, 14px (sm, 36 / 32px) or 16px (md, 44 / 36px), with optional icons and count badges.',
+  description: 'A tablist that switches between views of the same object, in several emphasis levels: underline (2px brand bar on a hairline), button-brand (solid action segment), button-gray (gray-50 pill), button-border (white pill in a gray track) and button-minimal (ringed white pill in a gray track); line is a vertical list with a subtle selected fill. Labels are semibold, 14px (sm, 36 / 32px) or 16px (md, 44 / 36px), with optional icons and count badges.',
   usage: 'Use to switch between peer views of one thing: sections of a settings page, panes of a record, views of a card. Route-level tabs are links with aria-current="page"; in-page tabs are buttons with aria-selected. Not for sequential steps (Stepper), not for filters (Tag / SegmentedControl), not for more than about eight options (SidebarNav or a Select).',
   anatomy: [
     { part: 'root', element: 'div', description: 'The tablist (role="tablist", aria-label). Flex row of tabs (column when data-orientation="vertical"); carries the bottom hairline for underline, or the gray-50 track for button-border / button-minimal / pill.' },
@@ -48,7 +48,7 @@ export const tabs: ComponentSpec = {
     variant: {
       values: ['underline', 'pill', 'enclosed', 'button-brand', 'button-gray', 'button-border', 'button-minimal', 'line'],
       default: 'underline',
-      description: 'underline = the page-section default: 2px brand-600 bar under the selected tab on a full-width gray-200 hairline, brand-700 text when selected . button-brand = solid action segment with brand-700 text (settings sub-navigation, filters in a card). button-gray = gray-50 pill with gray-700 text (quiet toolbars). button-border = white pill with a fine outline inside a gray-50 track with a gray-200 ring (view switch in a card header). button-minimal = white pill with a control outline inside a gray-50 track, radius 8 (dense toolbars). line = vertical list with a 2px brand bar on the left (settings side navigation; set data-orientation="vertical"). pill = the older name of button-border, kept for existing markup. enclosed = folder tabs that merge into the panel below (editor panes only).',
+      description: 'underline = the page-section default: 2px brand-600 bar under the selected tab on a full-width gray-200 hairline, brand-700 text when selected . button-brand = solid action segment with brand-700 text (settings sub-navigation, filters in a card). button-gray = gray-50 pill with gray-700 text (quiet toolbars). button-border = white pill with a fine outline inside a gray-50 track with a gray-200 ring (view switch in a card header). button-minimal = white pill with a control outline inside a gray-50 track, radius 8 (dense toolbars). line = vertical list with a subtle selected fill and action-colored text (settings side navigation; set data-orientation="vertical"). pill = the older name of button-border, kept for existing markup. enclosed = folder tabs that merge into the panel below (editor panes only).',
     },
     size: {
       values: ['sm', 'md'],
@@ -67,7 +67,7 @@ export const tabs: ComponentSpec = {
     },
   },
   states: {
-    current: { selector: ' .cn-tabs__tab[aria-selected="true"], & .cn-tabs__tab[aria-current="page"]', description: 'The selected tab (lives on the TAB, not the root). underline / line: brand-700 text and the 2px brand-600 bar; button-brand: action fill and on-action text; button-gray: gray-50 fill; button-border: white pill with a fine outline; button-minimal: white pill with a control outline; enclosed: surface fill with an open bottom.', markup: 'aria-selected="true" on a role="tab" button, or aria-current="page" on a link tab' },
+    current: { selector: ' .cn-tabs__tab[aria-selected="true"], & .cn-tabs__tab[aria-current="page"]', description: 'The selected tab (lives on the TAB, not the root). underline: action-colored text and bottom rule; line: action-colored text and subtle fill; button-brand: action fill and on-action text; button-gray: gray-50 fill; button-border: white pill with a fine outline; button-minimal: white pill with a control outline; enclosed: surface fill with an open bottom.', markup: 'aria-selected="true" on a role="tab" button, or aria-current="page" on a link tab' },
     hover: { selector: ' .cn-tabs__tab:hover', description: 'Pointer over a tab: a subtle surface change; the selection bar stays on the current tab.', markup: 'native :hover on the tab' },
     focus: { selector: ' .cn-tabs__tab:focus-visible', description: 'Keyboard focus on a tab: the token-defined focus ring around that tab.', markup: 'native :focus-visible on the tab' },
     disabled: { selector: ' .cn-tabs__tab:disabled, & .cn-tabs__tab[aria-disabled="true"]', description: 'Tab cannot be chosen (feature off, no data yet). 50% opacity, no hover; keep the label so users know the view exists.', markup: 'disabled or aria-disabled="true" on the tab' },
@@ -129,7 +129,7 @@ export const tabs: ComponentSpec = {
       'button-minimal': { root: { display: 'inline-flex', 'align-self': 'flex-start', gap: '{space.0.5}', 'border-radius': '{radius.control}', 'background-color': '{color.bg-subtle}', 'box-shadow': ring('{color.border-default}') }, tab: { 'border-radius': '{radius.control}' } },
       line: {
         root: { 'flex-direction': 'column', 'align-items': 'stretch', gap: '{space.2}', width: 'max-content' },
-        tab: { 'justify-content': 'flex-start', padding: '{space.1} {space.3.5} {space.1} {space.3}', 'border-radius': '0', 'border-inline-start': '{border.width.medium} solid transparent' },
+        tab: { 'justify-content': 'flex-start', padding: '{space.1} {space.3.5} {space.1} {space.3}', 'border-radius': '0' },
       },
     },
     size: {
@@ -163,7 +163,7 @@ export const tabs: ComponentSpec = {
 .cn-tabs__panel { padding-top: {space.6}; outline: none; }
 .cn-tabs__panel:focus-visible { box-shadow: {shadow.focus}; border-radius: {radius.sm}; }
 ${on('underline')} { color: {color.fg-action}; border-bottom-color: {color.bg-action}; }
-${on('line')} { color: {color.fg-action}; border-inline-start-color: {color.bg-action}; }
+${on('line')} { color: {color.fg-action}; background-color: {color.bg-action-subtle}; }
 ${on('button-brand')} { color: {color.fg-on-action}; background-color: {color.bg-action}; }
 ${on('button-gray')} { color: {color.fg-muted}; background-color: {color.bg-subtle}; }
 ${on('button-border')}, ${on('pill')} { color: {color.fg-default}; background-color: {color.bg-surface}; box-shadow: ${ring('{color.border-control}')}; }
@@ -186,7 +186,7 @@ ${on('button-brand', ' .cn-tabs__count')} { background-color: transparent; box-s
     ex('Button gray', list('button-gray', 'sm', 'bg'), 'Same pill in gray-50 with gray-700 text.'),
     ex('Button border', list('button-border', 'sm', 'bo', ['All', 'Active', 'Archived']), 'A quiet track with 2px inset spacing holds a flat, outlined selected segment.'),
     ex('Button minimal', list('button-minimal', 'sm', 'bm', ['Day', 'Week', 'Month']), 'A compact neutral track; the selected segment uses the surface fill and a control outline.'),
-    ex('Line (vertical)', `<div style="display:flex;gap:var(--cn-space-8);align-items:flex-start">${list('line', 'md', 'ln')}${list('button-brand', 'sm', 'lv', SETTINGS, 2, 'vertical')}</div>`, 'line = 2px brand bar on the left, 32px rows; any button variant becomes a column with data-orientation="vertical".'),
+    ex('Line (vertical)', `<div style="display:flex;gap:var(--cn-space-8);align-items:flex-start">${list('line', 'md', 'ln')}${list('button-brand', 'sm', 'lv', SETTINGS, 2, 'vertical')}</div>`, 'line = subtle selected fill and action-colored text, 32px rows; any button variant becomes a column with data-orientation="vertical".'),
     ex('Full width', `<div style="width:100%;max-width:480px">${list('underline', 'sm', 'fw', ['Overview', 'Activity', 'Files', 'Notes'], 1, 'horizontal', 'full')}</div>`, 'data-width="full": every tab takes an equal share and the underline gaps grow to 16px.'),
     ex('Pill and enclosed (kept for existing markup)', `<div style="display:flex;flex-direction:column;gap:var(--cn-space-6);align-items:flex-start">${list('pill', 'md', 'pl', ['Overview', 'Activity', 'Files'])}${list('enclosed', 'md', 'en', ['Preview', 'HTML', 'CSS', 'React'], 1)}</div>`, 'pill is the same look as button-border, with token-defined corners and 2px inset spacing. enclosed is the folder tab for editor panes.'),
     ex('With panel', `<div style="width:100%;max-width:560px">${list('underline', 'md', 'pn', ['Steps', 'Replies', 'Settings'])}<div class="cn-tabs__panel" role="tabpanel" id="panel-pn-0" aria-labelledby="tab-pn-0" tabindex="0"><p class="cn-text-body-md">4 steps over 9 days. The next email goes out Thursday at 09:00 to 38 customers.</p></div></div>`, 'The panel is a sibling after the tablist with padding-top 24px.'),

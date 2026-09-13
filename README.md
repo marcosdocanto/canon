@@ -8,7 +8,7 @@ Canon is an open-source design system for apps built with coding agents. It prov
 
 ## Connect your agent
 
-Paste this into the Claude or Codex conversation for a new or existing project:
+Paste this into your coding agent's conversation for a new or existing project:
 
 ```text
 Use Canon as this project's design system.

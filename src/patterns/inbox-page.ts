@@ -31,7 +31,7 @@ export const inboxPage: Pattern = {
 .cn-inbox__threads { display: flex; flex-direction: column; overflow: auto; }
 .cn-inbox__thread { display: flex; gap: {space.3}; padding: {space.4}; border-bottom: {border.width.thin} solid {color.border-subtle}; text-decoration: none; color: inherit; }
 .cn-inbox__thread:hover { background-color: {color.bg-subtle}; }
-.cn-inbox__thread--active { background-color: {color.bg-subtle}; box-shadow: inset 2px 0 0 {color.bg-action}; }
+.cn-inbox__thread--active { background-color: {color.bg-subtle}; }
 .cn-inbox__thread[data-unread] .cn-inbox__name { font-weight: {font.weight.semibold}; }
 .cn-inbox__thread[data-unread] .cn-inbox__name::after { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: {radius.full}; background-color: {color.bg-action}; margin-inline-start: {space.2}; vertical-align: middle; }
 .cn-inbox__thread-body { display: flex; flex-direction: column; gap: {space.0.5}; min-width: 0; flex: 1 1 auto; }

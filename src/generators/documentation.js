@@ -32,7 +32,7 @@
   starterPrompt.textContent = starterPrompt.textContent.replace('__CANON_CONNECTION_URL__', connectionUrl);
   starterButton.addEventListener('click', async () => {
     if (await copyText(starterPrompt.textContent, starterButton)) {
-      starterStatus.textContent = 'Prompt copiado. Cole na conversa do seu projeto no Claude ou no Codex.';
+      starterStatus.textContent = 'Prompt copiado. Cole na conversa do projeto com seu agente de código.';
     } else {
       const range = document.createRange();
       range.selectNodeContents(starterPrompt);

@@ -44,7 +44,7 @@ export const sidebar: ComponentSpec = {
     theme: { values: ['light', 'dark', 'brand'], default: 'light', description: 'light = white; dark = gray-950 surface with gray-800 borders; brand = brand-700 surface (marketing-style app).' },
   },
   states: {
-    current: { selector: ' .cn-sidebar__item[aria-current="page"]', description: 'The active destination: subtle fill, fg-default, icon fg-muted.', markup: 'aria-current="page" on the item' },
+    current: { selector: ' .cn-sidebar__item[aria-current="page"]', description: 'The active destination: subtle fill with action-colored text and icon.', markup: 'aria-current="page" on the item' },
     hover: { selector: ' .cn-sidebar__item:hover', description: 'Subtle fill.', markup: 'native' },
     focus: { selector: ' .cn-sidebar__item:focus-visible', description: 'Focus ring.', markup: 'native' },
   },
@@ -73,7 +73,7 @@ export const sidebar: ComponentSpec = {
     panel: { display: 'flex', 'flex-direction': 'column', gap: '{space.0.5}', width: '256px', padding: '{space.5} {space.4}' },
     'rail-item': { display: 'inline-flex', 'align-items': 'center', 'justify-content': 'center', width: '48px', height: '48px', 'border-radius': '{radius.md}', color: '{color.fg-subtle}' },
     '@states': {
-      current: { item: { 'background-color': '{color.bg-action-subtle}', color: '{color.fg-action}', 'box-shadow': 'inset 2px 0 0 currentColor' } },
+      current: { item: { 'background-color': '{color.bg-action-subtle}', color: '{color.fg-action}' } },
       hover: { item: { 'background-color': '{color.bg-subtle}', color: '{color.fg-default}' } },
       focus: { item: { outline: 'none', 'box-shadow': '{shadow.focus}' } },
     },
@@ -94,7 +94,6 @@ export const sidebar: ComponentSpec = {
   },
   extraCss: `
 .cn-sidebar__logo { clip-path: polygon(0 0, 100% 0, 100% 22%, 27% 22%, 27% 78%, 100% 78%, 100% 100%, 0 100%); border-radius: 0; }
-[dir="rtl"] .cn-sidebar__item[aria-current="page"] { box-shadow: inset -2px 0 0 currentColor; }
 .cn-sidebar[data-variant="slim"] .cn-sidebar__label, .cn-sidebar[data-variant="slim"] .cn-sidebar__badge, .cn-sidebar[data-variant="slim"] .cn-sidebar__brand-name, .cn-sidebar[data-variant="slim"] .cn-sidebar__account-text, .cn-sidebar[data-variant="slim"] .cn-sidebar__account-action { display: none; }
 .cn-sidebar[data-variant="slim"] .cn-sidebar__brand { padding-inline: 0; }
 .cn-sidebar[data-variant="slim"] .cn-sidebar__footer { align-items: center; }
@@ -117,7 +116,7 @@ export const sidebar: ComponentSpec = {
   ],
   rules: [
     'Width 280px, matching SidebarNav. Slim rail 68px. Dual tier 68 + 256. The sidebar never scrolls the page; its own nav scrolls.',
-    'Items match SidebarNav: 36px tall with a 20px icon, 8px gap and horizontal padding, label-md typography, and 2px between rows. The current item carries a leading rule and action-tinted surface; hover uses a quiet neutral fill.',
+    'Items match SidebarNav: 36px tall with a 20px icon, 8px gap and horizontal padding, label-md typography, and 2px between rows. The current item uses action-colored text and a subtle surface; hover uses a quiet neutral fill.',
     'Order: logo, optional search, main items (≤ 7), sections, then the footer with Support/Settings and the account card.',
     'Counts use the badge part; never red dots for ordinary counts.',
     'On tablets collapse to the slim rail; on mobile replace with the MobileHeader drawer.',

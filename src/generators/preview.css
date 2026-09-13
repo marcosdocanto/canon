@@ -13,7 +13,7 @@
 .pv-nav__group { font-family: var(--P-font-family-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--P-color-fg-subtle); margin: 16px 0 6px; }
 .pv-nav a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--P-color-fg-muted); }
 .pv-nav a:hover { background: var(--P-color-bg-subtle); color: var(--P-color-fg-default); }
-.pv-nav a[aria-current="location"] { background: var(--P-color-bg-subtle); color: var(--P-color-fg-action); font-weight: 600; box-shadow: inset 2px 0 var(--P-color-bg-action); }
+.pv-nav a[aria-current="location"] { background: var(--P-color-bg-subtle); color: var(--P-color-fg-action); font-weight: 600; }
 .pv-nav-group { margin: 6px 0; }
 .pv-nav-group > summary { display: flex; align-items: center; justify-content: space-between; min-height: 32px; padding: 6px 8px; font-size: 12px; font-weight: 500; color: var(--P-color-fg-default); list-style: none; cursor: pointer; }
 .pv-nav-group > summary::-webkit-details-marker { display: none; }

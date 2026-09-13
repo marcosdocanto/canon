@@ -1,6 +1,6 @@
 {
   "name": "canon-ds",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A design system for apps built with coding agents: shared tokens, components, layouts, CSS and React exports, focused instructions, lint and MCP tools.",
   "homepage": "https://marcosdocanto.github.io/canon/",
   "repository": {
@@ -10,7 +10,16 @@
   "bugs": {
     "url": "https://github.com/marcosdocanto/canon/issues"
   },
-  "keywords": ["design-system", "coding-agents", "mcp", "studio", "design-tokens", "css", "react", "vibe-coding"],
+  "keywords": [
+    "design-system",
+    "coding-agents",
+    "mcp",
+    "studio",
+    "design-tokens",
+    "css",
+    "react",
+    "vibe-coding"
+  ],
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

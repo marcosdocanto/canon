@@ -105,7 +105,7 @@ function overview(system: System): string {
   return `<section class="pv-section pv-overview" id="f-overview">
     <div class="pv-kicker">Canon / Build with your agent</div>
     <h2 class="pv-h2">${esc(system.meta.name)}</h2>
-    <p class="pv-lead">Conecte este design system ao Claude ou Codex no seu projeto. O Canon entrega as referências e instruções para o agente seguir nas próximas alterações de interface.</p>
+    <p class="pv-lead">Conecte este design system ao seu agente de código no projeto. O Canon entrega as referências e instruções para o agente seguir nas próximas alterações de interface.</p>
     <a class="pv-start" href="./docs.html#primeiro-projeto">Conectar ao meu projeto <span aria-hidden="true">→</span></a>
     <div class="pv-overview__tokens">
       <a href="#f-color"><span class="pv-overview__color" aria-hidden="true"></span><span>Brand<span class="pv-overview__value" data-token="brand.600">${esc(system.tokens.color.primitive.brand['600'])}</span></span></a>
