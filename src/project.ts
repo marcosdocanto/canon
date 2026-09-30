@@ -28,6 +28,18 @@ export function findProject(from: string): Project | undefined {
   }
 }
 
+/**
+ * Like `findProject`, but only returns a result when `.canon/project.json` lives at `root` itself
+ * — never one inherited from an ancestor directory. `findProject` deliberately walks up (so a
+ * subdirectory of a project can run `canon build` without `--root`), but that's wrong for callers
+ * that must never let an unrelated ancestor project's `adapter` leak into a nested root that has no
+ * config of its own (adopt's design-dir refusal guard; install()'s adapter-preserving rewrite).
+ */
+export function findLocalProject(root: string): Project | undefined {
+  const project = findProject(root);
+  return project && project.root === realpathSync(resolve(root)) ? project : undefined;
+}
+
 export function projectWrite(root: string, design: string, adapter?: string): Write {
   const config = { version: 1, design: relative(root, design).split(sep).join('/') || '.', ...(adapter ? { adapter } : {}) };
   return { root, path: join(root, CONFIG), content: Buffer.from(JSON.stringify(config, null, 2) + '\n') };

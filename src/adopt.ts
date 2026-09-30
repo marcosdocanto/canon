@@ -13,7 +13,7 @@ import { detectAdapter } from './adapters/index.ts';
 import { createSystem, writeDesignDir } from './system.ts';
 import { buildLib } from './build-lib.ts';
 import { install } from './install.ts';
-import { findProject, projectWrite } from './project.ts';
+import { findLocalProject, projectWrite } from './project.ts';
 import { installFiles } from './design-files.ts';
 
 export interface AdoptOptions {
@@ -42,6 +42,22 @@ function packageName(root: string): string {
     } catch { /* invalid package.json: fall through to basename */ }
   }
   return basename(root);
+}
+
+/**
+ * Library mode has no Canon-authored component/pattern catalog — the target library's own code
+ * (read through the adapter's `inventory`) is the catalog; `buildLib`'s DESIGN.md/agents
+ * generation and `storyWrites` only ever read `adapter.inventory(root)`, never
+ * `system.components`/`system.patterns` (see build-lib.ts). Left un-stripped, `writeDesignDir`
+ * would dump Canon's full native catalog (~90 components, ~19 patterns) into the adopted repo as
+ * dead weight and bloat the plan with misleading create-lines. Strips both collections from a
+ * freshly created `System` before it's planned or written. Exported so `init-lib`'s apply tail
+ * (Task 11) can reuse it.
+ */
+export function stripNativeCatalog(system: System): System {
+  system.components = [];
+  system.patterns = [];
+  return system;
 }
 
 function relDisplay(root: string, path: string): string {
@@ -76,6 +92,8 @@ function buildPlan(root: string, designDir: string, system: System, components: 
 
   lines.push(planLine(root, join(designDir, 'system.json')));
   lines.push(planLine(root, join(designDir, 'tokens.json')));
+  // `system` is always `stripNativeCatalog`'d by the caller before reaching here, so these are
+  // no-ops in practice — kept so the plan stays accurate if that ever changes.
   for (const c of system.components) lines.push(planLine(root, join(designDir, 'components', `${c.slug}.json`)));
   for (const p of system.patterns) lines.push(planLine(root, join(designDir, 'patterns', `${p.slug}.json`)));
   // writeDesignDir only ever creates README.md (never overwrites an existing one), so it's only
@@ -125,16 +143,18 @@ export async function adopt(opts: AdoptOptions): Promise<AdoptResult> {
 
   const theme = adapter.readTheme(root);
   const components = adapter.inventory(root);
-  const system = await createSystem({
+  const system = stripNativeCatalog(await createSystem({
     name: packageName(root),
     prefix: 'ds',
     seeds: { overrides: adapter.themeOverrides(theme) },
-  });
+  }));
 
   const plan = buildPlan(root, designDir, system, components, opts.hooks);
   if (!opts.apply) return { plan, applied: false };
 
-  const isAdapterMode = findProject(root)?.adapter !== undefined;
+  // Root-local only: an ancestor directory's adapter-mode project must never waive this repo's
+  // own refusal check for a nested root that has no `.canon/project.json` of its own.
+  const isAdapterMode = findLocalProject(root)?.adapter !== undefined;
   if (existsSync(join(designDir, 'system.json')) && !isAdapterMode) {
     throw new Error(`${join(designDir, 'system.json')} already exists and isn't an adapter-managed design. Pass --design to adopt into a different directory.`);
   }
