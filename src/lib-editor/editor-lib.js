@@ -11,6 +11,7 @@
 // <canvas> 2D context) instead of duplicating that module's OKLCH math. That also means this file
 // recognizes anything the browser's CSS parser accepts as a color (hex, rgb(), hsl(), oklch(),
 // color(), …), a superset of the hex/rgb/hsl/oklch the brief calls out by name.
+import { parseClassList, composeClassList, SCALES } from './classmap.js';
 (() => {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -418,6 +419,157 @@
     box.append(add);
     return box;
   }
+
+  // ---- Structured property editor: the designer-facing layer over a class list -----------------
+  // Parses the list into typed properties (classmap.js) and renders controls — color pickers fed
+  // by the project's own theme, radius slider, spacing steppers, typography selects. Everything
+  // unrecognized stays in a collapsed Advanced chip editor. Edits recompose the class string
+  // through composeClassList (order-preserving) and hand it to `onChange(classString)` — the same
+  // draft/save flow the chips used, so the server contract is untouched.
+  const FAMILY_LABELS = {
+    background: 'Background', textColor: 'Text color', borderColor: 'Border color', ringColor: 'Ring color',
+    fontSize: 'Font size', fontWeight: 'Weight', radius: 'Radius', spacing: 'Spacing', size: 'Size',
+    borderWidth: 'Border', shadow: 'Shadow', opacity: 'Opacity',
+  };
+  const themeColorNames = () => (state.vocab?.colors ?? []).map((c) => c.name);
+
+  function colorSwatchButton(color, selected, onPick) {
+    const b = el('button', {
+      type: 'button', class: 'le-swatch', 'data-selected': selected ? '1' : null,
+      title: color.name, 'aria-label': color.name, onclick: () => onPick(color.name),
+    });
+    b.style.background = color.light;
+    return b;
+  }
+
+  function colorControl(prop, apply) {
+    const box = el('div', { class: 'le-prop-color' });
+    const grid = el('div', { class: 'le-swatch-grid' });
+    for (const color of state.vocab?.colors ?? []) {
+      grid.append(colorSwatchButton(color, prop.kind === 'theme' && prop.value === color.name,
+        (name) => apply({ ...prop, kind: 'theme', value: name })));
+    }
+    const custom = el('input', {
+      type: 'text', class: 'le-in le-in--sm le-prop-custom', spellcheck: 'false',
+      placeholder: '#hex / oklch(…)', value: prop.kind === 'raw' ? prop.value : '',
+    });
+    custom.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const v = custom.value.trim();
+      if (v) apply({ ...prop, kind: 'raw', value: v });
+    });
+    const opacity = el('input', {
+      type: 'number', class: 'le-in le-in--sm le-prop-opacity', min: '0', max: '100', step: '5',
+      placeholder: '100', value: prop.opacity ?? '', title: 'Opacity %',
+    });
+    opacity.addEventListener('change', () => apply({ ...prop, opacity: opacity.value || undefined }));
+    box.append(grid, el('div', { class: 'le-prop-color__row' }, custom, opacity));
+    return box;
+  }
+
+  function scaleControl(prop, scale, apply, { slider = false } = {}) {
+    if (slider) {
+      const idx = Math.max(0, scale.indexOf(prop.value));
+      const input = el('input', { type: 'range', class: 'le-range', min: '0', max: String(scale.length - 1), step: '1', value: String(idx) });
+      const label = el('code', { class: 'le-range__val' }, prop.value || 'default');
+      input.addEventListener('input', () => { label.textContent = scale[Number(input.value)] || 'default'; });
+      input.addEventListener('change', () => apply({ ...prop, value: scale[Number(input.value)] }));
+      return el('div', { class: 'le-prop-scale' }, input, label);
+    }
+    const select = el('select', { class: 'le-in le-in--sm' },
+      ...scale.map((v) => el('option', { value: v, selected: v === prop.value ? true : null }, v === '' ? 'default' : v)));
+    select.addEventListener('change', () => apply({ ...prop, value: select.value }));
+    return select;
+  }
+
+  function controlFor(prop, apply) {
+    switch (prop.family) {
+      case 'background': case 'textColor': case 'borderColor': case 'ringColor':
+        return colorControl(prop, apply);
+      case 'radius': return scaleControl(prop, SCALES.RADIUS_SCALE, apply, { slider: true });
+      case 'opacity': {
+        const input = el('input', { type: 'range', class: 'le-range', min: '0', max: '100', step: '5', value: prop.value });
+        input.addEventListener('change', () => apply({ ...prop, value: input.value }));
+        return el('div', { class: 'le-prop-scale' }, input, el('code', { class: 'le-range__val' }, prop.value));
+      }
+      case 'spacing': case 'size': return scaleControl(prop, SCALES.SPACING_SCALE, apply);
+      case 'fontSize': return scaleControl(prop, SCALES.FONT_SIZES, apply);
+      case 'fontWeight': return scaleControl(prop, SCALES.FONT_WEIGHTS, apply);
+      case 'borderWidth': return scaleControl(prop, SCALES.BORDER_WIDTHS, apply);
+      case 'shadow': return scaleControl(prop, SCALES.SHADOWS, apply);
+      default: return null;
+    }
+  }
+
+  function propLabel(prop) {
+    const base = FAMILY_LABELS[prop.family] ?? prop.family;
+    if (prop.family === 'spacing' || prop.family === 'size') return `${base} · ${prop.axis}`;
+    if ((prop.family === 'radius' || prop.family === 'borderWidth') && prop.side) return `${base} · ${prop.side}`;
+    return base;
+  }
+
+  const ADDABLE = [
+    { label: 'Background', prop: { family: 'background', kind: 'theme', value: 'primary' } },
+    { label: 'Text color', prop: { family: 'textColor', kind: 'theme', value: 'foreground' } },
+    { label: 'Border color', prop: { family: 'borderColor', kind: 'theme', value: 'border' } },
+    { label: 'Radius', prop: { family: 'radius', side: '', value: 'md' } },
+    { label: 'Padding x', prop: { family: 'spacing', axis: 'px', value: '4' } },
+    { label: 'Padding y', prop: { family: 'spacing', axis: 'py', value: '2' } },
+    { label: 'Gap', prop: { family: 'spacing', axis: 'gap', value: '2' } },
+    { label: 'Font size', prop: { family: 'fontSize', value: 'sm' } },
+    { label: 'Weight', prop: { family: 'fontWeight', value: 'medium' } },
+    { label: 'Border', prop: { family: 'borderWidth', side: '', value: '' } },
+    { label: 'Shadow', prop: { family: 'shadow', value: 'sm' } },
+  ];
+
+  // One shared flag is enough: the user edits one Advanced section at a time, and a re-render that
+  // collapses the section mid-typing is the annoyance being prevented.
+  let advancedOpen = false;
+  function renderStyleEditor(classString, onChange) {
+    const parsed = parseClassList(classString, themeColorNames());
+    const wrap = el('div', { class: 'le-props' });
+
+    const applyEdit = (slot, nextProp) => onChange(composeClassList(parsed, new Map([[slot, nextProp]])));
+
+    for (const prop of parsed.props) {
+      const row = el('div', { class: 'le-prop-row', 'data-family': prop.family },
+        el('span', { class: 'le-prop-label' }, propLabel(prop)),
+        controlFor(prop, (next) => applyEdit(prop.slot, next)),
+        el('button', {
+          type: 'button', class: 'le-chip__x', 'aria-label': `Remove ${propLabel(prop)}`,
+          title: 'Remove this property', onclick: () => applyEdit(prop.slot, null),
+        }, '×'));
+      wrap.append(row);
+    }
+
+    const present = new Set(parsed.props.map((p) => `${p.family}:${p.axis ?? p.side ?? ''}`));
+    const addable = ADDABLE.filter((a) => !present.has(`${a.prop.family}:${a.prop.axis ?? a.prop.side ?? ''}`));
+    if (addable.length) {
+      const select = el('select', { class: 'le-in le-in--sm le-prop-add' },
+        el('option', { value: '' }, '+ add property'),
+        ...addable.map((a, i) => el('option', { value: String(i) }, a.label)));
+      select.addEventListener('change', () => {
+        const pick = addable[Number(select.value)];
+        if (pick) onChange(composeClassList(parsed, new Map(), [pick.prop]));
+        select.value = '';
+      });
+      wrap.append(select);
+    }
+
+    if (parsed.rest.length) {
+      const details = el('details', { class: 'le-advanced', open: advancedOpen ? true : null },
+        el('summary', { onclick: () => { advancedOpen = !details.open; } }, `Advanced (${parsed.rest.length})`),
+        renderChipList(parsed.rest, {
+          onRemove: (cls) => {
+            const slot = parsed.slots.findIndex((s) => !s.prop && s.token === cls);
+            if (slot !== -1) onChange(composeClassList(parsed, new Map([[slot, null]])));
+          },
+          onAdd: (cls) => onChange(parsed.slots.length ? `${composeClassList(parsed)} ${cls}` : cls),
+        }));
+      wrap.append(details);
+    }
+    return wrap;
+  }
   function renderComponentPanel(slug) {
     const info = specOf(slug);
     const wrap = el('div', { class: 'le-stack' });
@@ -438,12 +590,12 @@
       ensureDraft(slug);
       const spec = draftComponents.get(slug);
 
+      // The style editor works on one space-separated string; a cva base/value is an ARRAY of
+      // literals, so join for parsing and store any edit back as a single-entry array (printCva
+      // emits that as one literal — same classes, tidier source).
       wrap.append(el('section', { class: 'le-section' },
-        el('h3', { class: 'le-group-title' }, 'Base classes'),
-        renderChipList(spec.base, {
-          onRemove: (cls) => { spec.base = spec.base.filter((c) => c !== cls); onComponentChange(slug); },
-          onAdd: (cls) => { if (!spec.base.includes(cls)) spec.base.push(cls); onComponentChange(slug); },
-        })));
+        el('h3', { class: 'le-group-title' }, 'Base'),
+        renderStyleEditor(spec.base.join(' '), (next) => { spec.base = [next]; onComponentChange(slug); })));
 
       for (const [axis, values] of Object.entries(spec.variants)) wrap.append(renderAxisSection(slug, values, axis));
 
@@ -484,14 +636,9 @@
       row.append(el('div', { class: 'le-issue' }, saveIssue.message));
     }
     // The draft model is a single space-separated string (the same shape the save payload and
-    // PartInfo.classes both use) — split into chips for editing, same as a cva class LIST, and
-    // rejoined back into that string on every add/remove.
-    const classes = draft[part.name].split(/\s+/).filter(Boolean);
+    // PartInfo.classes both use) — rendered through the structured style editor.
     const line = el('div', { class: 'le-part-chips' },
-      renderChipList(classes, {
-        onRemove: (cls) => { draft[part.name] = classes.filter((c) => c !== cls).join(' '); onComponentChange(slug); },
-        onAdd: (cls) => { if (!classes.includes(cls)) classes.push(cls); draft[part.name] = classes.join(' '); onComponentChange(slug); },
-      }));
+      renderStyleEditor(draft[part.name], (next) => { draft[part.name] = next; onComponentChange(slug); }));
     if (part.dynamicTail) line.append(el('code', { class: 'le-part-tail', title: part.dynamicTail }, `+ ${part.dynamicTail}`));
     row.append(line);
     if (part.note) row.append(el('p', { class: 'le-hint le-part-note' }, part.note));
@@ -503,10 +650,7 @@
     for (const [value, classes] of Object.entries(values)) {
       table.append(el('div', { class: 'le-axis-row', 'data-value': value },
         el('code', { class: 'le-axis-value' }, value),
-        renderChipList(classes, {
-          onRemove: (cls) => { values[value] = classes.filter((c) => c !== cls); onComponentChange(slug); },
-          onAdd: (cls) => { if (!classes.includes(cls)) classes.push(cls); onComponentChange(slug); },
-        })));
+        renderStyleEditor(classes.join(' '), (next) => { values[value] = [next]; onComponentChange(slug); })));
     }
     const addValue = el('button', {
       type: 'button', class: 'le-add',

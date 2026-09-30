@@ -201,6 +201,13 @@ function readState(root: string, adapter: Adapter) {
     theme,
     components: components.map(publicComponent),
     vocabulary: vocabulary(theme),
+    // Structured vocab for the property controls: the project's real theme colors with both
+    // modes' values (picker swatches), keyed by the names Tailwind classes use (bg-<name>).
+    vocab: {
+      colors: Object.entries(theme.vars)
+        .filter(([, v]) => /^(#|rgb|hsl|oklch|color\()/i.test(v.light) || /%|deg|\d/.test(v.light))
+        .map(([name, v]) => ({ name, light: v.light, dark: v.dark })),
+    },
     hashes: stateHashes(theme, components),
   };
 }

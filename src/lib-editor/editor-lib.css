@@ -169,3 +169,22 @@ button { font: inherit; }
   .le-rail { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--le-border-default); }
   .le-preview { min-height: 320px; }
 }
+
+/* ---- Structured property editor (designer controls over class lists) ---- */
+.le-props { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1; }
+.le-prop-row { display: grid; grid-template-columns: 96px 1fr 20px; align-items: center; gap: 8px; }
+.le-prop-label { font-size: 11px; color: var(--le-muted, #9a9a9a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.le-swatch-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.le-swatch { width: 18px; height: 18px; border-radius: 5px; border: 1px solid rgba(255,255,255,.18); cursor: pointer; padding: 0; }
+.le-swatch[data-selected="1"] { outline: 2px solid #e8b34c; outline-offset: 1px; }
+.le-prop-color { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.le-prop-color__row { display: flex; gap: 6px; }
+.le-prop-custom { flex: 1; min-width: 0; }
+.le-prop-opacity { width: 64px; }
+.le-prop-scale { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.le-range { flex: 1; min-width: 0; accent-color: #e8b34c; }
+.le-range__val { font-size: 11px; min-width: 44px; text-align: right; color: var(--le-muted, #9a9a9a); }
+.le-prop-add { align-self: flex-start; max-width: 160px; }
+.le-advanced { border-top: 1px dashed rgba(255,255,255,.12); padding-top: 6px; margin-top: 2px; }
+.le-advanced > summary { font-size: 11px; color: var(--le-muted, #9a9a9a); cursor: pointer; user-select: none; }
+.le-advanced[open] > summary { margin-bottom: 6px; }

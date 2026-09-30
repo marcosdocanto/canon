@@ -146,10 +146,13 @@ test('opening Dialog lists its parts: DialogContent editable with chips, DialogT
 
   const contentRow = page.locator('.le-part-row[data-part="DialogContent"]');
   await contentRow.waitFor({ state: 'visible', timeout: 5000 });
-  const contentChipCount = await contentRow.locator('.le-chip').count();
-  assert.ok(contentChipCount > 1, 'DialogContent is editable and shows its existing classes as chips');
-  assert.equal(await contentRow.locator('input.le-in--sm').count(), 1, 'DialogContent offers a "+ class" input, like a variant chip list');
-  assert.match(await contentRow.locator('.le-part-tail').innerText(), /className/, 'DialogContent\'s dynamic tail (the cn(...) className arg) is shown muted beside the chips');
+  // The structured editor renders property rows for recognized families and an Advanced chip
+  // section for everything else; DialogContent's literal yields at least one of each.
+  assert.ok(await contentRow.locator('.le-prop-row').count() >= 1, 'DialogContent shows structured property controls');
+  assert.ok(await contentRow.locator('.le-advanced').count() === 1, 'unrecognized tokens live in a collapsed Advanced section');
+  await contentRow.locator('.le-advanced > summary').click();
+  assert.ok(await contentRow.locator('.le-chip').count() >= 1, 'Advanced holds the untyped tokens as chips');
+  assert.match(await contentRow.locator('.le-part-tail').innerText(), /className/, 'DialogContent\'s dynamic tail (the cn(...) className arg) is shown muted beside the editor');
 
   const triggerRow = page.locator('.le-part-row[data-part="DialogTrigger"]');
   await triggerRow.waitFor({ state: 'visible', timeout: 5000 });
@@ -172,7 +175,9 @@ test('adding a class to DialogContent through the Parts chip editor and saving s
   const save = page.locator('#le-save');
   assert.ok(await save.isDisabled(), 'Save starts disabled until something is dirty');
 
-  const addInput = contentRow.locator('input.le-in--sm');
+  // The structured editor keeps free-form class entry inside the Advanced section.
+  await contentRow.locator('.le-advanced > summary').click();
+  const addInput = contentRow.locator('.le-advanced input[placeholder="+ class ⏎"]');
   await addInput.fill('canon-part-e2e');
   await addInput.press('Enter');
   assert.ok(await save.isEnabled(), 'editing a part\'s classes must mark the draft dirty');
@@ -195,6 +200,7 @@ test('adding a class to DialogContent through the Parts chip editor and saving s
   await item.click();
   const reloadedRow = page.locator('.le-part-row[data-part="DialogContent"]');
   await reloadedRow.waitFor({ state: 'visible', timeout: 5000 });
+  await reloadedRow.locator('.le-advanced > summary').click(); // unrecognized token lives in Advanced
   assert.match(await reloadedRow.innerText(), /canon-part-e2e/, 'the persisted class is shown after a fresh state load');
   assert.ok(await page.locator('#le-save').isDisabled(), 'freshly-loaded state must not start dirty');
 });
