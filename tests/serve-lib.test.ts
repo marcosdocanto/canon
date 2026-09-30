@@ -415,6 +415,77 @@ test('POST /api/lib/save applies a part edit (dialog, no cva at all), byte-ident
   assert.ok(designMd.includes(newClasses), 'DESIGN.md documents the just-saved part classes, not the stale pre-save ones');
 });
 
+test('POST /api/lib/save composes TWO part edits for the SAME slug (dialog) in one save, exercising the staged-content chain and the name-sort', async (t) => {
+  // DialogOverlay (near the top of dialog.tsx) and DialogDescription (the very last subcomponent)
+  // are picked deliberately far apart in the file so the "everything else byte-identical" check
+  // below also covers DialogContent/DialogHeader/DialogFooter/DialogTitle's untouched definitions
+  // sitting between them. The request body's OWN key order is DialogOverlay then DialogDescription
+  // — NOT the sorted order (`D` < `O`, so `writePart` calls actually run Description, then Overlay)
+  // and NOT source-declaration order either (Overlay is declared first) — to exercise both the
+  // `.sort()` in serve-lib.ts's composition loop and the staged-content chaining through it: each
+  // `writePart` call must re-locate its own span fresh against the PRIOR call's returned content,
+  // not a precomputed span from `inventory()`.
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const before = readFileSync(dialogFile, 'utf8');
+  const dialogParts = state.components.find((c: any) => c.slug === 'dialog').parts;
+  const overlayBefore = dialogParts.find((p: any) => p.name === 'DialogOverlay');
+  const descriptionBefore = dialogParts.find((p: any) => p.name === 'DialogDescription');
+
+  const newOverlay = 'fixed inset-0 z-50 bg-black/60';
+  const newDescription = 'text-sm text-muted-foreground/80';
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      parts: { dialog: { DialogOverlay: newOverlay, DialogDescription: newDescription } },
+      hashes: state.hashes,
+    }),
+  });
+  assert.equal(res.status, 200);
+  const body = res.json();
+
+  const dialogAfter = body.components.find((c: any) => c.slug === 'dialog');
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogOverlay').classes, newOverlay);
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogDescription').classes, newDescription);
+  // Sibling parts sitting between the two edited ones are untouched.
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogHeader').classes, 'flex flex-col space-y-1.5 text-center sm:text-left');
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogFooter').classes, 'flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2');
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogTitle').classes, 'text-lg font-semibold leading-none tracking-tight');
+  assert.ok(dialogAfter.parts.find((p: any) => p.name === 'DialogContent').classes?.includes('translate-x-[-50%]'));
+
+  // Byte-exact, segment by segment: prefix up to the first (source-order) splice, the untouched
+  // middle between the two literals, and the suffix after the second — both edits landed with
+  // nothing else in the file disturbed.
+  const oldOverlayLiteral = `"${overlayBefore.classes}"`;
+  const oldDescriptionLiteral = `"${descriptionBefore.classes}"`;
+  const overlayStart = before.indexOf(oldOverlayLiteral);
+  const overlayEnd = overlayStart + oldOverlayLiteral.length;
+  const descriptionStart = before.indexOf(oldDescriptionLiteral);
+  const descriptionEnd = descriptionStart + oldDescriptionLiteral.length;
+  assert.ok(overlayStart >= 0 && descriptionStart > overlayEnd, 'DialogOverlay must precede DialogDescription in source order');
+
+  const prefix = before.slice(0, overlayStart);
+  const middle = before.slice(overlayEnd, descriptionStart);
+  const suffix = before.slice(descriptionEnd);
+
+  const after = readFileSync(dialogFile, 'utf8');
+  const newOverlayLiteral = `"${newOverlay}"`;
+  const newDescriptionLiteral = `"${newDescription}"`;
+  assert.equal(after.slice(0, overlayStart), prefix, 'prefix before DialogOverlay byte-identical');
+  assert.equal(after.slice(overlayStart, overlayStart + newOverlayLiteral.length), newOverlayLiteral, 'DialogOverlay literal updated');
+  const middleStart = overlayStart + newOverlayLiteral.length;
+  assert.equal(after.slice(middleStart, middleStart + middle.length), middle, 'untouched middle (DialogContent/Header/Footer/Title) byte-identical');
+  const newDescriptionStart = middleStart + middle.length;
+  assert.equal(after.slice(newDescriptionStart, newDescriptionStart + newDescriptionLiteral.length), newDescriptionLiteral, 'DialogDescription literal updated');
+  assert.equal(after.slice(newDescriptionStart + newDescriptionLiteral.length), suffix, 'suffix after DialogDescription byte-identical');
+
+  assert.equal(body.hashes[dialogFile], sha256(dialogFile));
+  assert.notEqual(body.hashes[dialogFile], state.hashes[dialogFile]);
+});
+
 test('POST /api/lib/save composes a cva edit and a part edit to the SAME file in one transaction', async (t) => {
   const f = await libFixture(t, { extraFiles: { 'src/ui/toolbar.tsx': TOOLBAR_TSX } });
   const state = (await f.request('/api/lib/state')).json();
