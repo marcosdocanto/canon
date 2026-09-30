@@ -4,7 +4,7 @@ import { readConfig } from './config.ts';
 import { readTheme, writeTheme } from './theme.ts';
 import { inventory, writeVariants } from './inventory.ts';
 import { renderSpec } from './render.ts';
-import { SEMANTIC_MAP } from './mapping.ts';
+import { SEMANTIC_MAP, themeToOverrides } from './mapping.ts';
 
 export const shadcnAdapter: Adapter = {
   id: 'shadcn',
@@ -19,4 +19,5 @@ export const shadcnAdapter: Adapter = {
   },
   renderSpec,
   describeVar: (name) => SEMANTIC_MAP[name],
+  themeOverrides: themeToOverrides,
 };

@@ -1,4 +1,5 @@
 import type { Write } from '../design-files.ts';
+import type { DeepPartial, Tokens } from '../types.ts';
 
 /** CSS custom property theme configuration for a library. */
 export interface LibraryTheme { file: string; vars: Record<string, { light: string; dark?: string }>; }
@@ -27,4 +28,6 @@ export interface Adapter {
   renderSpec(component: ComponentInfo): RenderExample[];
   /** Canon semantic token name a theme var maps to, or undefined when the var isn't mapped. */
   describeVar(name: string): string | undefined;
+  /** Map a library theme's own values onto Canon token overrides (for `canon adopt`'s seeds.overrides). */
+  themeOverrides(theme: LibraryTheme): DeepPartial<Tokens>;
 }
