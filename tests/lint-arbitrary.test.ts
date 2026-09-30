@@ -55,3 +55,21 @@ test('no duplicate violations for hex color arbitrary values', () => {
   assert.equal(violations.length, 1, 'exactly one total violation');
   assert.equal(violations[0].rule, 'tailwind-arbitrary-color', 'violation is from tailwind-arbitrary-color rule');
 });
+
+test('tailwind-arbitrary-color flags divide color arbitrary values', () => {
+  const violations = lintSource(known, 'Test.tsx', '<button className="divide-[#e5e7eb]" />');
+  assert.equal(violations.length, 1, 'exactly one total violation');
+  assert.equal(violations[0].rule, 'tailwind-arbitrary-color');
+});
+
+test('tailwind-arbitrary-color flags placeholder color arbitrary values', () => {
+  const violations = lintSource(known, 'Test.tsx', '<button className="placeholder-[#fff]" />');
+  assert.equal(violations.length, 1, 'exactly one total violation');
+  assert.equal(violations[0].rule, 'tailwind-arbitrary-color');
+});
+
+test('tailwind-arbitrary-color does not flag divide-x dimension values', () => {
+  const violations = lintSource(known, 'Test.tsx', '<button className="divide-x-[3px]" />');
+  const colorViolations = violations.filter(v => v.rule === 'tailwind-arbitrary-color');
+  assert.equal(colorViolations.length, 0, 'no color violations for divide-x-[3px]');
+});
