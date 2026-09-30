@@ -128,11 +128,17 @@ function componentSection(entry: { info: ComponentInfo; examples: RenderExample[
 </section>`;
 }
 
-/** `--name: value;` lines for every theme var that has a value for `key` (`light` or `dark`). */
+/**
+ * `--name: value;` lines for every theme var that has a value for `key` (`light` or `dark`).
+ * Both name and value are HTML-escaped: this text lands inside a `<style>` element, and a
+ * hostile or merely malformed theme value (e.g. one containing `</style><script>`) must never be
+ * able to break out of it. Legitimate CSS values (oklch(...), hex, rem, hsl triplets) contain
+ * none of `&<>"'` and so round-trip byte-identical.
+ */
 function varLines(theme: LibraryTheme, key: 'light' | 'dark'): string {
   return Object.entries(theme.vars)
     .filter(([, value]) => value[key] !== undefined)
-    .map(([name, value]) => `  --${name}: ${value[key]};`)
+    .map(([name, value]) => `  --${escapeHtml(name)}: ${escapeHtml(value[key]!)};`)
     .join('\n');
 }
 
@@ -146,7 +152,10 @@ function varLines(theme: LibraryTheme, key: 'light' | 'dark'): string {
 export function previewHtml(theme: LibraryTheme, components: { info: ComponentInfo; examples: RenderExample[] }[]): string {
   const rootVars = varLines(theme, 'light');
   const darkVars = varLines(theme, 'dark');
-  const themeBridge = Object.keys(theme.vars).map((name) => `  --color-${name}: var(--${name});`).join('\n');
+  // Var names are also escaped defensively: upstream (readTheme) constrains them to
+  // [A-Za-z0-9-]+, but this module must not rely on a caller it doesn't control for CSS-context
+  // safety — the same `<style>`-breakout hole applies to names as to values.
+  const themeBridge = Object.keys(theme.vars).map((name) => `  --color-${escapeHtml(name)}: var(--${escapeHtml(name)});`).join('\n');
   const sections = components.map(componentSection).join('\n');
 
   return `<!doctype html>

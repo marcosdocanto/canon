@@ -63,6 +63,49 @@ test('previewHtml inlines theme var values verbatim into :root and .dark', () =>
   assert.doesNotMatch(darkBlock, /--radius:/); // light-only var never appears in .dark
 });
 
+test('previewHtml escapes a theme VALUE that attempts a <style> breakout, while legitimate CSS values stay byte-identical', () => {
+  const hostile: LibraryTheme = {
+    file: '/fake/project/app/globals.css',
+    vars: {
+      background: { light: '0 0 0</style><script>alert(6)</script>', dark: 'oklch(0.145 0 0)' },
+      primary: { light: 'oklch(0.205 0 0)', dark: 'oklch(0.922 0 0)' },
+      radius: { light: '0.625rem' },
+      accent: { light: '#7c3aed' },
+    },
+  };
+  const html = previewHtml(hostile, [{ info: buttonInfo, examples: buttonExamples }]);
+
+  // No literal breakout sequence anywhere in the document.
+  assert.doesNotMatch(html, /<\/style><script>alert\(6\)<\/script>/);
+  assert.doesNotMatch(html, /<\/style>\s*<script>\s*alert\(6\)/);
+  // Exactly one <script> element exists in the whole document: the vendored runtime's own.
+  assert.equal((html.match(/<script/g) ?? []).length, 1);
+  assert.equal((html.match(/<\/script>/g) ?? []).length, 1);
+  // The hostile value is present only in its escaped form.
+  assert.match(html, /--background:\s*0 0 0&lt;\/style&gt;&lt;script&gt;alert\(6\)&lt;\/script&gt;;/);
+
+  // Legitimate CSS values (oklch, rem, hex) contain none of &<>"' and pass through byte-identical.
+  assert.match(html, /--primary:\s*oklch\(0\.205 0 0\);/);
+  assert.match(html, /--radius:\s*0\.625rem;/);
+  assert.match(html, /--accent:\s*#7c3aed;/);
+  const darkBlock = /\.dark\s*\{([^}]*)\}/.exec(html)?.[1] ?? '';
+  assert.match(darkBlock, /--primary:\s*oklch\(0\.922 0 0\);/);
+  assert.match(darkBlock, /--background:\s*oklch\(0\.145 0 0\);/);
+});
+
+test('previewHtml escapes theme var NAMES defensively in :root/.dark and the @theme inline bridge', () => {
+  const hostileName = 'primary</style><script>alert(7)</script>';
+  const hostile: LibraryTheme = {
+    file: '/fake/project/app/globals.css',
+    vars: { [hostileName]: { light: 'oklch(0.205 0 0)' } },
+  };
+  const html = previewHtml(hostile, [{ info: buttonInfo, examples: buttonExamples }]);
+  assert.doesNotMatch(html, /<\/style><script>alert\(7\)<\/script>/);
+  assert.equal((html.match(/<script/g) ?? []).length, 1); // still only the vendored runtime's
+  assert.match(html, /--primary&lt;\/style&gt;&lt;script&gt;alert\(7\)&lt;\/script&gt;:\s*oklch\(0\.205 0 0\);/);
+  assert.match(html, /--color-primary&lt;\/style&gt;&lt;script&gt;alert\(7\)&lt;\/script&gt;:\s*var\(--primary&lt;\/style&gt;&lt;script&gt;alert\(7\)&lt;\/script&gt;\);/);
+});
+
 test('previewHtml bridges theme vars into an @theme inline block for Tailwind v4', () => {
   const html = previewHtml(theme, [{ info: buttonInfo, examples: buttonExamples }]);
   assert.match(html, /<style type="text\/tailwindcss">/);
