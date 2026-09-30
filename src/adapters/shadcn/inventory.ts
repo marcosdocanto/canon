@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { Write } from '../../design-files.ts';
-import type { ComponentInfo, CvaSpec } from '../types.ts';
+import type { ComponentInfo, CvaSpec, PartInfo } from '../types.ts';
 import { readConfig } from './config.ts';
 import { CvaParseError, findCva, parseCva, spliceCva } from './cva.ts';
 import { parseParts, splicePart } from './parts.ts';
@@ -58,12 +58,45 @@ function unsafeVariantKey(spec: CvaSpec): string | undefined {
 // `writePart` reuses this SAME grammar (via `validateClassList`) for a part's whole `classes`
 // string: a part's literal is spliced back by `splicePart` the same way a cva class string is by
 // `spliceCva` — wrapped in quotes, no escaping applied — so it needs the identical guarantee.
+//
+// `inventory()` ALSO applies this same grammar at READ time (`withWriteGrammar`, below) — not just
+// `writeVariants`/`writePart` at write time. Read/write grammar asymmetry (review finding):
+// `parseParts` happily marks a literal containing a single quote inside a double-quoted string as
+// editable — legit Tailwind (`after:content-['']`, `bg-[url('x')]`) that `parseParts` is right to
+// treat as a real static literal — but `SAFE_CLASS_LIST` forbids ANY quote character, so `writePart`
+// 422s on it even for an UNCHANGED resend. Without the read-time check below, a component would be
+// shown editable for a part that can never actually be saved.
 const SAFE_CLASS_LIST = /^[^\s"'`{}\\]+(?: [^\s"'`{}\\]+)*$/;
 
 function validateClassList(classes: string[], where: string): void {
   for (const cls of classes) {
     if (!SAFE_CLASS_LIST.test(cls)) throw new Error(`shadcn adapter: ${where} has an unsafe class string: ${JSON.stringify(cls)}`);
   }
+}
+
+/**
+ * Downgrade a part whose CURRENT literal `parseParts` resolved as editable (`classes`/`span` both
+ * set) but whose text doesn't fit `SAFE_CLASS_LIST` — the exact grammar `writePart` enforces before
+ * ever splicing a part's `classes` back to disk (via `validateClassList`). A literal like
+ * `after:content-['']` or `bg-[url('x')]` is legitimate Tailwind and a perfectly real static
+ * literal, so `parseParts` is right to resolve it — but splicing ANY value back into it (even the
+ * SAME value, unchanged) would 422, since `SAFE_CLASS_LIST` forbids every quote character. Refusing
+ * only at write time left a part "shown editable" that could never actually be saved — and because
+ * the editor used to send a whole slug's dirty parts together, one such part blocked every sibling
+ * edit on the same file (see the `SAFE_CLASS_LIST` comment above).
+ *
+ * `span` is dropped — the one field `writePart`/`handleSave` (serve-lib.ts) actually gate
+ * editability on — so this part is refused the same honest way any other read-only part is,
+ * without a round-trip to `writePart` ever being attempted. `classes` (and `dynamicTail`/`note`, if
+ * present) are kept AS-IS: the literal is still real and still worth displaying (e.g. the library
+ * preview renders it with its true, current styling), only its editability is withdrawn. A part
+ * that was already read-only (`classes === undefined`) has nothing to check here and passes through
+ * unchanged.
+ */
+function withWriteGrammar(part: PartInfo): PartInfo {
+  if (part.classes === undefined || SAFE_CLASS_LIST.test(part.classes)) return part;
+  const { span, ...rest } = part;
+  return { ...rest, readOnlyReason: 'contains characters the editor cannot write back (quotes)' };
 }
 
 /**
@@ -140,7 +173,10 @@ function findProjectRoot(dir: string): string {
  * `cva()` above. This is entirely independent of the `cva()` outcome — a read-only component
  * (its `cva()` failed to parse, or had an unsafe variant key) still gets its parts, since parts
  * and cva are unrelated axes of a component's styling and a file can carry both, either, or
- * neither.
+ * neither. Each part is then run through `withWriteGrammar`, which downgrades one that `parseParts`
+ * resolved as editable but that `writePart`'s own grammar could never actually write back (see its
+ * docstring) — so nothing this function returns is ever "editable" by a definition stricter code
+ * downstream doesn't share.
  */
 export function inventory(root: string): ComponentInfo[] {
   root = realpathSync(root); // never trust the caller's path to already be canonical (see connect.ts, install.ts)
@@ -160,7 +196,7 @@ export function inventory(root: string): ComponentInfo[] {
     const source = readFileSync(file, 'utf8');
     const exportName = firstPascalExport(source);
     if (!exportName) continue; // no real component export (e.g. a re-export-only barrel file)
-    const info: ComponentInfo = { slug, file, exportName, importPath: `${uiImportBase}/${slug}`, parts: parseParts(source) };
+    const info: ComponentInfo = { slug, file, exportName, importPath: `${uiImportBase}/${slug}`, parts: parseParts(source).map(withWriteGrammar) };
 
     // Only the first cva() call in the file is read; multiple cva() calls per file are unsupported in v1.
     const span = findCva(source);
@@ -249,9 +285,13 @@ function spansOverlap(a: { start: number; end: number }, b: { start: number; end
  * `SAFE_CLASS_LIST` — no quotes, backtick, braces or backslash) and refuses, naming the offending
  * value, before touching the file at all. Re-reads the file and re-parses its parts fresh —
  * `parseParts` is re-run rather than trusting `component.parts` from a possibly-stale `inventory()`
- * call, since a part's span may have moved since then — and refuses, naming the component and
- * part, when `partName` doesn't exist on this file or is read-only (no literal to splice; see
- * `PartInfo.readOnlyReason`). As a defensive backstop for the disjointness a part's span and the
+ * call, since a part's span may have moved since then — through the SAME `withWriteGrammar` step
+ * `inventory()` applies, so a part whose CURRENT literal doesn't fit `SAFE_CLASS_LIST` (e.g. a
+ * quote inside `after:content-['']`) is refused as read-only here too, independently of whatever
+ * `component.parts` says and regardless of how safe the NEW `classes` value being attempted is —
+ * and refuses, naming the component and part, when `partName` doesn't exist on this file or is
+ * read-only (no literal to splice; see `PartInfo.readOnlyReason`). As a defensive backstop for the
+ * disjointness a part's span and the
  * file's own `cva()` span are assumed to have (see the NOTE in shadcn/parts.ts's `parseParts`
  * docstring), also refuses — without touching the file — if the located part's span were ever
  * found to overlap the file's `cva()` span. Finally, before returning the `Write`, re-parses the
@@ -276,7 +316,7 @@ export function writePart(component: ComponentInfo, partName: string, classes: s
   // it under an already-realpath'd root), so re-resolving it again when staging is unnecessary.
   const file = stagedSource === undefined ? realpathSync(component.file) : component.file;
   const source = stagedSource ?? readFileSync(file, 'utf8');
-  const parts = parseParts(source); // re-parsed fresh, same as inventory() would today
+  const parts = parseParts(source).map(withWriteGrammar); // re-parsed fresh, same as inventory() would today — including the SAME write-grammar downgrade, so a part whose CURRENT literal isn't writable is refused here too, independently of `component.parts` and regardless of what new `classes` value is being attempted.
   const part = parts.find((p) => p.name === partName);
   if (!part) throw new Error(`shadcn adapter: "${component.slug}" has no part named "${partName}"`);
   if (!part.span) throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" is read-only${part.readOnlyReason ? ` (${part.readOnlyReason})` : ''}`);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { inventory, writeVariants } from '../src/adapters/shadcn/inventory.ts';
+import { inventory, writeVariants, writePart } from '../src/adapters/shadcn/inventory.ts';
 import { shadcnAdapter } from '../src/adapters/shadcn/index.ts';
 import { installFiles } from '../src/design-files.ts';
 import { clone, FIXTURE } from './fixtures/clone.ts';
@@ -205,4 +205,39 @@ test('a digit-leading variant value like "2xl" is safe and does not force read-o
   assert.equal(scale.readOnlyReason, undefined);
   assert.ok(scale.cva, 'a digit-leading value must not disqualify the component');
   assert.deepEqual(Object.keys(scale.cva!.variants.size), ['sm', '2xl']);
+});
+
+test('a part literal containing a quote (legit Tailwind arbitrary-value syntax) is downgraded to read-only at inventory time, not shown falsely editable', (t) => {
+  // Read/write grammar asymmetry (review finding): `parseParts` is RIGHT to resolve
+  // `after:content-['']` as a real static literal — it's legitimate Tailwind — but `writePart`'s
+  // own grammar (`SAFE_CLASS_LIST`) forbids every quote character, so splicing it back would 422
+  // even for an UNCHANGED resend. `inventory()` must catch this itself so nothing is ever shown
+  // editable that can't actually be saved.
+  const root = clone(t);
+  writeFileSync(join(root, 'src/ui/quote-part.tsx'), [
+    'function QuoteLiteral({ className }: { className?: string }) {',
+    '  return <div className={cn("after:content-[\'\']", className)} />',
+    '}',
+    'export { QuoteLiteral }',
+  ].join('\n'));
+
+  const quotePart = inventory(root).find((i) => i.slug === 'quote-part')!;
+  const part = quotePart.parts!.find((p) => p.name === 'QuoteLiteral')!;
+  assert.equal(part.classes, "after:content-['']", 'the literal is still shown (display), unchanged');
+  assert.equal(part.dynamicTail, 'className', 'other PartInfo fields survive the downgrade');
+  assert.equal(part.span, undefined, 'span (the write-eligibility field) is dropped');
+  assert.equal(part.readOnlyReason, 'contains characters the editor cannot write back (quotes)');
+
+  // writePart refuses it as read-only — even for an otherwise-perfectly-safe replacement value —
+  // because the part has no `span` to splice into, not because of anything wrong with what's being
+  // written this time.
+  const before = readFileSync(quotePart.file, 'utf8');
+  assert.throws(() => writePart(quotePart, 'QuoteLiteral', 'block'), /"quote-part"'s part "QuoteLiteral" is read-only \(contains characters the editor cannot write back \(quotes\)\)/);
+  assert.equal(readFileSync(quotePart.file, 'utf8'), before, 'a refused writePart call must never touch the file');
+
+  // And resending the EXACT SAME (unwritable) literal, unchanged, throws too — just for the OTHER
+  // reason (writePart's own `validateClassList` rejects the incoming value before it ever reaches
+  // the read-only check): either way, nothing is ever written.
+  assert.throws(() => writePart(quotePart, 'QuoteLiteral', "after:content-['']"), /unsafe class string/);
+  assert.equal(readFileSync(quotePart.file, 'utf8'), before, 'a refused writePart call must never touch the file');
 });

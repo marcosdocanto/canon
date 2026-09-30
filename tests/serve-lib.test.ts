@@ -133,6 +133,31 @@ function ToolbarSeparator({ className, ...props }: React.HTMLAttributes<HTMLDivE
 export { Toolbar, toolbarVariants, ToolbarSeparator }
 `;
 
+/**
+ * A single component file with no `cva()` at all and TWO exported parts: `QuoteLiteral` carries a
+ * legit-Tailwind literal with an embedded single quote (`after:content-['']`, arbitrary-value
+ * syntax) — real static JSX per shadcn/parts.ts, but unsafe to splice back per inventory.ts's
+ * `SAFE_CLASS_LIST`, so `withWriteGrammar` must downgrade it to read-only at inventory time (the
+ * read/write grammar asymmetry finding). `QuoteSibling` is a perfectly ordinary editable sibling IN
+ * THE SAME FILE, used below to confirm that one unwritable part never blocks the other, in the same
+ * request shape `editor-lib.js`'s `save()` now sends (only the changed part, never the whole
+ * per-slug draft map).
+ */
+const QUOTE_PART_TSX = `import * as React from "react"
+
+import { cn } from "~/lib/utils"
+
+function QuoteLiteral({ className }: { className?: string }) {
+  return <div className={cn("after:content-['']", className)} />
+}
+
+function QuoteSibling({ className }: { className?: string }) {
+  return <div className={cn("block text-sm", className)} />
+}
+
+export { QuoteLiteral, QuoteSibling }
+`;
+
 /** Clone the shadcn-app fixture, adopt it (apply: true), and boot the resulting adapter-mode project's Studio. */
 async function libFixture(t: TestContext, opts: { v3?: boolean; extraFiles?: Record<string, string> } = {}) {
   const root = clone(t);
@@ -567,6 +592,64 @@ test('POST /api/lib/save refuses a read-only part in the payload, naming the slu
   assert.equal(json.slug, 'dialog');
   assert.equal(json.partName, 'DialogTrigger');
   assert.equal(readFileSync(dialogFile, 'utf8'), before, 'dialog.tsx must be untouched');
+});
+
+test('GET /api/lib/state shows a quote-bearing part literal as read-only (new reason), and saving it 422s, but its sibling part in the SAME file saves fine sent alone — the request shape editor-lib.js\'s save() now sends', async (t) => {
+  // Read/write grammar asymmetry (review finding): `after:content-['']` is legit Tailwind and a
+  // real static literal (parseParts is right to resolve it) — but writePart's own grammar
+  // (SAFE_CLASS_LIST) forbids every quote character, so it can never actually be spliced back,
+  // even unchanged. inventory.ts's `withWriteGrammar` must catch this at inventory time so the
+  // state payload never shows it as editable; and because editor-lib.js's save() now sends only
+  // the PER-PART entries that actually changed (not a slug's whole draft map), a save touching
+  // just the sibling must succeed even though QuoteLiteral itself could never be saved.
+  const f = await libFixture(t, { extraFiles: { 'src/ui/quote-part.tsx': QUOTE_PART_TSX } });
+  const quotePartFile = join(f.root, 'src', 'ui', 'quote-part.tsx');
+  const state = (await f.request('/api/lib/state')).json();
+  const quotePart = state.components.find((c: any) => c.slug === 'quote-part');
+  assert.ok(quotePart, 'quote-part.tsx is inventoried');
+  assert.equal(quotePart.cva, undefined, 'quote-part.tsx has no cva() at all');
+
+  const quoteLiteral = quotePart.parts.find((p: any) => p.name === 'QuoteLiteral');
+  assert.equal(quoteLiteral.classes, "after:content-['']", 'the literal is still shown, unchanged, for display');
+  assert.equal(quoteLiteral.readOnlyReason, 'contains characters the editor cannot write back (quotes)');
+
+  const quoteSibling = quotePart.parts.find((p: any) => p.name === 'QuoteSibling');
+  assert.equal(quoteSibling.classes, 'block text-sm');
+  assert.equal(quoteSibling.readOnlyReason, undefined, 'the sibling is an ordinary editable part, unaffected');
+
+  // The file still joins the hash allowlist: QuoteSibling alone keeps it hashable even though
+  // QuoteLiteral doesn't (hashableComponent's existing span-based logic, unchanged).
+  assert.equal(state.hashes[quotePartFile], sha256(quotePartFile));
+
+  // Targeting the unwritable part directly 422s, naming it, and touches nothing.
+  const before = readFileSync(quotePartFile, 'utf8');
+  const badRes = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { 'quote-part': { QuoteLiteral: "after:content-['']" } }, hashes: state.hashes }),
+  });
+  assert.equal(badRes.status, 422);
+  const badJson = badRes.json();
+  assert.equal(badJson.slug, 'quote-part');
+  assert.equal(badJson.partName, 'QuoteLiteral');
+  assert.equal(readFileSync(quotePartFile, 'utf8'), before, 'quote-part.tsx must be untouched');
+
+  // Sending ONLY the sibling's changed value (never QuoteLiteral's unchanged one alongside it — the
+  // exact shape editor-lib.js's save() now builds via changedParts()) saves cleanly.
+  const newSibling = 'block text-sm gap-1';
+  const goodRes = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { 'quote-part': { QuoteSibling: newSibling } }, hashes: state.hashes }),
+  });
+  assert.equal(goodRes.status, 200);
+  const goodBody = goodRes.json();
+  const quotePartAfter = goodBody.components.find((c: any) => c.slug === 'quote-part');
+  assert.equal(quotePartAfter.parts.find((p: any) => p.name === 'QuoteSibling').classes, newSibling);
+  // QuoteLiteral itself is untouched by this save — still the original literal, still read-only.
+  assert.equal(quotePartAfter.parts.find((p: any) => p.name === 'QuoteLiteral').classes, "after:content-['']");
+  assert.equal(quotePartAfter.parts.find((p: any) => p.name === 'QuoteLiteral').readOnlyReason, 'contains characters the editor cannot write back (quotes)');
+  assert.match(readFileSync(quotePartFile, 'utf8'), /"block text-sm gap-1"/);
 });
 
 test('POST /api/lib/save rejects an unknown part name, naming the slug and part, zero writes', async (t) => {

@@ -60,10 +60,12 @@
   let state = null; // last-known-good server state: { theme, components, vocabulary, hashes }
   let draftTheme = null; // { file, vars } — cloned from state.theme, mutated by the Theme tab
   const draftComponents = new Map(); // slug -> CvaSpec, populated lazily the first time a component is opened
-  // slug -> { [partName]: classes } — EDITABLE parts only (those with a `classes` string in state;
-  // a read-only part has none to draft), populated lazily the first time a component's Parts
-  // section is rendered. Shape matches the save payload's `parts[slug]` exactly, so no
-  // transformation is needed when building it (see save()).
+  // slug -> { [partName]: classes } — EDITABLE parts only (a `classes` string AND no
+  // `readOnlyReason` in state — see `specPartsOf`; a read-only part has nothing to draft, whether
+  // or not it still shows a `classes` value for display), populated lazily the first time a
+  // component's Parts section is rendered. Shape matches the save payload's `parts[slug]` (once
+  // filtered down to just what changed — see `changedParts`/`save()`), so no transformation is
+  // needed when building it.
   const draftParts = new Map();
   let activeView = 'theme'; // 'theme' | a component slug
   let conflictFile = null; // set on a 409 save response
@@ -78,10 +80,17 @@
     const info = specOf(slug);
     if (info?.cva) draftComponents.set(slug, clone(info.cva));
   }
-  /** The editable subset of `specOf(slug)?.parts` as a `{ [partName]: classes }` map — the same shape `draftParts` holds — used both to seed a fresh draft and to diff the current draft against last-known-good state. */
+  /**
+   * The editable subset of `specOf(slug)?.parts` as a `{ [partName]: classes }` map — the same
+   * shape `draftParts` holds — used both to seed a fresh draft and to diff the current draft
+   * against last-known-good state. A part counts as editable only when it has BOTH `classes` and no
+   * `readOnlyReason`: those two used to be mutually exclusive on every `PartInfo`, but inventory.ts's
+   * `withWriteGrammar` can now set both at once (a real literal the editor can display but can never
+   * write back, e.g. `after:content-['']`) — `classes` alone is no longer a safe editability signal.
+   */
   function specPartsOf(slug) {
     const editable = {};
-    for (const part of specOf(slug)?.parts ?? []) if (part.classes !== undefined) editable[part.name] = part.classes;
+    for (const part of specOf(slug)?.parts ?? []) if (part.classes !== undefined && !part.readOnlyReason) editable[part.name] = part.classes;
     return editable;
   }
   function ensureDraftParts(slug) {
@@ -97,6 +106,23 @@
     const draft = draftParts.get(slug);
     if (!draft) return false;
     return JSON.stringify(draft) !== JSON.stringify(specPartsOf(slug));
+  }
+  /**
+   * For one part-dirty slug, only the `{ [partName]: classes }` entries whose draft value actually
+   * DIFFERS from last-known-good state — the exact shape `save()`'s `parts[slug]` payload sends.
+   * Defense in depth + UX fix (read/write grammar asymmetry): the whole-map resend this used to be
+   * meant an untouched sibling always rode along with a dirty one, so if that sibling ever turned
+   * out to be unwritable (e.g. inventory.ts's `withWriteGrammar` downgrading a quote-bearing
+   * literal), the WHOLE slug's save would 422 — even parts nobody touched. Filtering to only what
+   * changed means a future asymmetry like that can block just the part actually being edited, never
+   * its siblings.
+   */
+  function changedParts(slug) {
+    const draft = draftParts.get(slug) ?? {};
+    const loaded = specPartsOf(slug);
+    const changed = {};
+    for (const [name, classes] of Object.entries(draft)) if (loaded[name] !== classes) changed[name] = classes;
+    return changed;
   }
   function isComponentDirty(slug) { return isCvaDirty(slug) || isPartsDirty(slug); }
   function isThemeDirty() { return JSON.stringify(draftTheme?.vars) !== JSON.stringify(state?.theme?.vars); }
@@ -188,8 +214,14 @@
     const dirty = dirtySlugs();
     const cvaDirty = dirty.filter(isCvaDirty);
     if (cvaDirty.length) payload.components = Object.fromEntries(cvaDirty.map((slug) => [slug, draftComponents.get(slug)]));
+    // Per-slug, per-part: only entries whose draft value actually differs from last-known-good
+    // state (`changedParts`) — never the whole draft map, even for a slug that IS part-dirty. An
+    // untouched sibling must never ride along just because another part on the same slug changed.
     const partsDirty = dirty.filter(isPartsDirty);
-    if (partsDirty.length) payload.parts = Object.fromEntries(partsDirty.map((slug) => [slug, draftParts.get(slug)]));
+    if (partsDirty.length) {
+      const changedBySlug = Object.fromEntries(partsDirty.map((slug) => [slug, changedParts(slug)]).filter(([, changed]) => Object.keys(changed).length > 0));
+      if (Object.keys(changedBySlug).length) payload.parts = changedBySlug;
+    }
     try {
       const res = await fetch('/api/lib/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       if (res.status === 200) {
@@ -437,10 +469,14 @@
   function renderPartRow(slug, part) {
     const row = el('div', { class: 'le-part-row', 'data-part': part.name });
     row.append(el('code', { class: 'le-part-name' }, part.name));
-    if (part.classes === undefined) {
-      // Read-only: name + reason only, never an input — same rule the rail/Components panel apply
-      // to a read-only component as a whole.
+    if (part.classes === undefined || part.readOnlyReason) {
+      // Read-only: name + reason, never an input — same rule the rail/Components panel apply to a
+      // read-only component as a whole. `readOnlyReason` alone decides this (not `classes ===
+      // undefined`): a part can carry a real `classes` string AND be read-only at once (inventory.ts's
+      // `withWriteGrammar` — a literal the write grammar can't round-trip, e.g. a quote inside
+      // `after:content-['']`), in which case the current value is still shown, muted, for context.
       row.append(el('span', { class: 'le-hint' }, part.readOnlyReason ? `Read-only: ${part.readOnlyReason}` : 'Read-only'));
+      if (part.classes !== undefined) row.append(el('code', { class: 'le-part-tail' }, part.classes));
       return row;
     }
     const draft = draftParts.get(slug);
