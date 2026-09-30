@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -166,6 +166,30 @@ test('CLI: `canon adopt --apply` then `canon build` both exit 0 (build routes to
   const build = spawnSync(process.execPath, [BIN, 'build'], { cwd: root, encoding: 'utf8' });
   assert.equal(build.status, 0, build.stderr || build.stdout);
   assert.match(build.stdout, /library-mode dist/);
+});
+
+test('CLI: `canon check` exits 0 in a freshly adopted+built library-mode project, and nonzero once the theme file changes', (t) => {
+  const root = clone(t);
+  const apply = spawnSync(process.execPath, [BIN, 'adopt', '--apply'], { cwd: root, encoding: 'utf8' });
+  assert.equal(apply.status, 0, apply.stderr || apply.stdout);
+  const build = spawnSync(process.execPath, [BIN, 'build'], { cwd: root, encoding: 'utf8' });
+  assert.equal(build.status, 0, build.stderr || build.stdout);
+
+  const fresh = spawnSync(process.execPath, [BIN, 'check'], { cwd: root, encoding: 'utf8' });
+  assert.equal(fresh.status, 0, fresh.stdout + fresh.stderr);
+  assert.match(fresh.stdout, /up to date/);
+
+  // Touch the theme file the adapter reads and bump its mtime well into the future, so the
+  // comparison against the dist files' mtimes can never be flaky on a coarse filesystem clock.
+  const css = join(root, 'app', 'globals.css');
+  writeFileSync(css, readFileSync(css, 'utf8') + '\n/* touched */\n');
+  const future = new Date(Date.now() + 60_000);
+  utimesSync(css, future, future);
+
+  const stale = spawnSync(process.execPath, [BIN, 'check'], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(stale.status, 0, stale.stdout);
+  assert.match(stale.stdout, /stale/i);
+  assert.match(stale.stdout, /globals\.css/);
 });
 
 test('CLI: `canon add <slug>` routes to the adapter in an adopted (library-mode) project', (t) => {

@@ -314,7 +314,10 @@ export function lintSource(known: Known, file: string, content: string, opts: { 
         const primitive = known.colors.some((c) => c.name === m[2] + '.' + m[3]);
         push(span.start + m.index!, 'tailwind-palette', primitive ? 'warn' : 'error', (primitive ? 'Primitive color utility ' : 'Tailwind palette class ') + m[0], 'use a semantic color utility');
       }
-      for (const m of span.text.matchAll(/(?<![\w-])(?:bg|text|border|ring|fill|stroke|shadow|outline|decoration|accent|caret|from|via|to|divide|placeholder)-\[(#[0-9a-fA-F]{3,8}|rgba?\([^\]]*\)|hsla?\([^\]]*\)|oklch\([^\]]*\)|color\([^\]]*\))\]/g)) {
+      // Prefixes that carry a color in Tailwind, including the side/logical modifiers that still
+      // bear a color (border-x/y/t/r/b/l/s/e, ring-offset, divide-x/y) — a bare optional modifier
+      // segment per base utility, not a generic `-[a-z]+` suffix, so e.g. `w-[13px]` never matches.
+      for (const m of span.text.matchAll(/(?<![\w-])(?:bg|text|border(?:-[xytrbles])?|ring(?:-offset)?|fill|stroke|shadow|outline|decoration|accent|caret|from|via|to|divide(?:-[xy])?|placeholder)-\[(#[0-9a-fA-F]{3,8}|(?:[-\d.]+(?:%|px|rem|em|deg|rad|turn)?[_,\s]+)*(?:rgba?|hsla?|oklch|oklab|color)\([^\]]*\))\]/g)) {
         push(span.start + m.index!, 'tailwind-arbitrary-color', 'error', 'arbitrary color value bypasses the theme', nearestColor(known, m[1]));
       }
       for (const m of span.text.matchAll(/(?<![\w-])[a-z-]+-\[(-?\d+(?:\.\d+)?(?:px|rem|em))\]/g)) {

@@ -113,7 +113,7 @@ async function main() {
         await initLib({ root, lib, preset: flag('preset'), name, exec: defaultExec, hooks: !has('no-hooks'), force: has('force') });
         console.log(`✓ ${name} on ${lib} → ${root}`);
         console.log(`  design dir: design · stories: stories/canon`);
-        console.log(`\nNext: canon studio --port 0 --open, or open the generated *.stories.tsx files, then commit.`);
+        console.log(`\nNext: canon storybook to view the generated stories (or open the *.stories.tsx files directly); canon lint / canon check to verify, then commit.`);
         return;
       }
       const { createSystem, writeDesignDir } = await import('./system.ts');
@@ -208,12 +208,20 @@ async function main() {
     case 'check': {
       const { loadDesignDir } = await import('./system.ts');
       const { runLint, formatReport } = await import('./lint.ts');
-      const { checkBuild } = await import('./build-manifest.ts');
       const dir = designDir();
       const system = loadDesignDir(dir);
-      const build = checkBuild(system, dir);
+      const root = rootDir();
+      const project = findProject(root) ?? findProject(dir);
+      let build: { ok: boolean; issues: string[] };
+      if (project?.adapter) {
+        const { checkLib } = await import('./build-lib.ts');
+        build = checkLib(project.root, dir);
+      } else {
+        const { checkBuild } = await import('./build-manifest.ts');
+        build = checkBuild(system, dir);
+      }
       let ok = build.ok;
-      if (build.ok) console.log('✓ dist is up to date (all generators and file hashes verified)');
+      if (build.ok) console.log(project?.adapter ? '✓ dist is up to date (theme + inventory unchanged since last build)' : '✓ dist is up to date (all generators and file hashes verified)');
       else {
         for (const issue of build.issues) console.log(`✗ ${issue}`);
         console.log('  Run `canon build` to rebuild all artifacts.');
