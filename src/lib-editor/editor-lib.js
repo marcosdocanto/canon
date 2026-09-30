@@ -60,9 +60,14 @@
   let state = null; // last-known-good server state: { theme, components, vocabulary, hashes }
   let draftTheme = null; // { file, vars } — cloned from state.theme, mutated by the Theme tab
   const draftComponents = new Map(); // slug -> CvaSpec, populated lazily the first time a component is opened
+  // slug -> { [partName]: classes } — EDITABLE parts only (those with a `classes` string in state;
+  // a read-only part has none to draft), populated lazily the first time a component's Parts
+  // section is rendered. Shape matches the save payload's `parts[slug]` exactly, so no
+  // transformation is needed when building it (see save()).
+  const draftParts = new Map();
   let activeView = 'theme'; // 'theme' | a component slug
   let conflictFile = null; // set on a 409 save response
-  let saveIssue = null; // { scope: 'theme' | 'component' | null, slug?, message } from a 422 (or other) save failure
+  let saveIssue = null; // { scope: 'theme' | 'component' | 'part' | null, slug?, partName?, message } from a 422 (or other) save failure
   let saving = false;
   let previewBlobUrl = null;
   let vocabReady = false;
@@ -73,13 +78,29 @@
     const info = specOf(slug);
     if (info?.cva) draftComponents.set(slug, clone(info.cva));
   }
-  function isComponentDirty(slug) {
+  /** The editable subset of `specOf(slug)?.parts` as a `{ [partName]: classes }` map — the same shape `draftParts` holds — used both to seed a fresh draft and to diff the current draft against last-known-good state. */
+  function specPartsOf(slug) {
+    const editable = {};
+    for (const part of specOf(slug)?.parts ?? []) if (part.classes !== undefined) editable[part.name] = part.classes;
+    return editable;
+  }
+  function ensureDraftParts(slug) {
+    if (draftParts.has(slug)) return;
+    draftParts.set(slug, specPartsOf(slug));
+  }
+  function isCvaDirty(slug) {
     const draft = draftComponents.get(slug);
     if (!draft) return false;
     return JSON.stringify(draft) !== JSON.stringify(specOf(slug)?.cva);
   }
+  function isPartsDirty(slug) {
+    const draft = draftParts.get(slug);
+    if (!draft) return false;
+    return JSON.stringify(draft) !== JSON.stringify(specPartsOf(slug));
+  }
+  function isComponentDirty(slug) { return isCvaDirty(slug) || isPartsDirty(slug); }
   function isThemeDirty() { return JSON.stringify(draftTheme?.vars) !== JSON.stringify(state?.theme?.vars); }
-  function dirtySlugs() { return [...draftComponents.keys()].filter(isComponentDirty); }
+  function dirtySlugs() { return [...new Set([...draftComponents.keys(), ...draftParts.keys()])].filter(isComponentDirty); }
   function isDirty() { return isThemeDirty() || dirtySlugs().length > 0; }
   const axisValueFromKey = (key) => (key === 'true' ? true : key === 'false' ? false : key);
 
@@ -123,6 +144,7 @@
     state = await res.json();
     draftTheme = clone(state.theme);
     draftComponents.clear();
+    draftParts.clear();
     if (activeView !== 'theme' && !specOf(activeView)) activeView = 'theme';
     conflictFile = null;
     saveIssue = null;
@@ -164,13 +186,17 @@
     const payload = { hashes: state.hashes };
     if (isThemeDirty()) payload.theme = draftTheme;
     const dirty = dirtySlugs();
-    if (dirty.length) payload.components = Object.fromEntries(dirty.map((slug) => [slug, draftComponents.get(slug)]));
+    const cvaDirty = dirty.filter(isCvaDirty);
+    if (cvaDirty.length) payload.components = Object.fromEntries(cvaDirty.map((slug) => [slug, draftComponents.get(slug)]));
+    const partsDirty = dirty.filter(isPartsDirty);
+    if (partsDirty.length) payload.parts = Object.fromEntries(partsDirty.map((slug) => [slug, draftParts.get(slug)]));
     try {
       const res = await fetch('/api/lib/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       if (res.status === 200) {
         state = await res.json();
         draftTheme = clone(state.theme);
         draftComponents.clear();
+        draftParts.clear();
         status('saved');
         renderAll();
         loadFullPreview();
@@ -181,15 +207,20 @@
         conflictFile = body.file ?? 'a project file';
         status('save conflict', true);
       } else if (res.status === 422) {
-        // Two distinct shapes from serve-lib.ts's handleSave: a theme-level failure (the adapter's
-        // writeTheme threw, e.g. the CSS-injection guard) responds { field: 'theme', message };
-        // a component failure (unknown/read-only slug, or writeVariants threw) responds
-        // { slug, message }. Each needs its own persistent, in-panel rendering — see
-        // renderThemePanel/renderComponentPanel — not just the 4s transient status() line.
+        // Three distinct shapes from serve-lib.ts's handleSave: a theme-level failure (the
+        // adapter's writeTheme threw, e.g. the CSS-injection guard) responds { field: 'theme',
+        // message }; a component (cva) failure (unknown/read-only slug, or writeVariants threw)
+        // responds { slug, message }; a part failure (unknown/read-only part, or writePart threw)
+        // responds { slug, partName, message }. Each needs its own persistent, in-panel rendering
+        // — see renderThemePanel/renderComponentPanel/renderPartRow — not just the 4s transient
+        // status() line.
         const body = await res.json().catch(() => ({}));
         if (body.field === 'theme') {
           saveIssue = { scope: 'theme', message: body.message ?? 'Save failed' };
           activeView = 'theme';
+        } else if (body.partName !== undefined) {
+          saveIssue = { scope: 'part', slug: body.slug, partName: body.partName, message: body.message ?? 'Save failed' };
+          if (body.slug && specOf(body.slug)) activeView = body.slug;
         } else {
           saveIssue = { scope: 'component', slug: body.slug, message: body.message ?? 'Save failed' };
           if (body.slug && specOf(body.slug)) activeView = body.slug;
@@ -361,25 +392,74 @@
     if (!info) { wrap.append(el('p', { class: 'le-hint le-hint--error' }, 'This component is no longer in the inventory — try Reload.')); return wrap; }
     if (saveIssue && saveIssue.scope === 'component' && saveIssue.slug === slug) wrap.append(el('div', { class: 'le-issue' }, saveIssue.message));
     wrap.append(el('div', { class: 'le-comp-meta' }, el('code', {}, info.importPath), el('span', { class: 'le-muted' }, info.exportName)));
-    if (!info.cva) {
-      wrap.append(el('p', { class: 'le-hint' }, info.readOnlyReason ? `Read-only: ${info.readOnlyReason}` : 'This component has no editable variants.'));
-      return wrap;
+
+    const hasCva = Boolean(info.cva);
+    const hasParts = Boolean(info.parts && info.parts.length);
+
+    if (!hasCva) {
+      // A cva()-level readOnlyReason (the call existed but failed to parse, or had an unsafe key)
+      // is always worth surfacing even when this component also has parts below; the "no editable
+      // variants" filler only applies when there's truly nothing else on this panel either.
+      if (info.readOnlyReason) wrap.append(el('p', { class: 'le-hint' }, `Read-only: ${info.readOnlyReason}`));
+      else if (!hasParts) wrap.append(el('p', { class: 'le-hint' }, 'This component has no editable variants.'));
+    } else {
+      ensureDraft(slug);
+      const spec = draftComponents.get(slug);
+
+      wrap.append(el('section', { class: 'le-section' },
+        el('h3', { class: 'le-group-title' }, 'Base classes'),
+        renderChipList(spec.base, {
+          onRemove: (cls) => { spec.base = spec.base.filter((c) => c !== cls); onComponentChange(slug); },
+          onAdd: (cls) => { if (!spec.base.includes(cls)) spec.base.push(cls); onComponentChange(slug); },
+        })));
+
+      for (const [axis, values] of Object.entries(spec.variants)) wrap.append(renderAxisSection(slug, values, axis));
+
+      if (Object.keys(spec.variants).length) wrap.append(renderDefaultsSection(slug, spec));
+      if (spec.compoundVariants.length) wrap.append(renderCompoundVariantsSection(spec));
     }
-    ensureDraft(slug);
-    const spec = draftComponents.get(slug);
 
-    wrap.append(el('section', { class: 'le-section' },
-      el('h3', { class: 'le-group-title' }, 'Base classes'),
-      renderChipList(spec.base, {
-        onRemove: (cls) => { spec.base = spec.base.filter((c) => c !== cls); onComponentChange(slug); },
-        onAdd: (cls) => { if (!spec.base.includes(cls)) spec.base.push(cls); onComponentChange(slug); },
-      })));
+    // Below Variants (when present): one row per exported subcomponent's own className literal —
+    // entirely independent of the cva() above (a file can carry both, either, or neither; see
+    // shadcn/parts.ts).
+    if (hasParts) wrap.append(renderPartsSection(slug, info.parts));
 
-    for (const [axis, values] of Object.entries(spec.variants)) wrap.append(renderAxisSection(slug, values, axis));
-
-    if (Object.keys(spec.variants).length) wrap.append(renderDefaultsSection(slug, spec));
-    if (spec.compoundVariants.length) wrap.append(renderCompoundVariantsSection(spec));
     return wrap;
+  }
+
+  // ---- Parts section: one row per exported subcomponent (shadcn/parts.ts's PartInfo) -----------
+  function renderPartsSection(slug, parts) {
+    ensureDraftParts(slug);
+    return el('section', { class: 'le-section', 'data-parts': '1' },
+      el('h3', { class: 'le-group-title' }, 'Parts'),
+      el('div', { class: 'le-parts-list' }, ...parts.map((part) => renderPartRow(slug, part))));
+  }
+  function renderPartRow(slug, part) {
+    const row = el('div', { class: 'le-part-row', 'data-part': part.name });
+    row.append(el('code', { class: 'le-part-name' }, part.name));
+    if (part.classes === undefined) {
+      // Read-only: name + reason only, never an input — same rule the rail/Components panel apply
+      // to a read-only component as a whole.
+      row.append(el('span', { class: 'le-hint' }, part.readOnlyReason ? `Read-only: ${part.readOnlyReason}` : 'Read-only'));
+      return row;
+    }
+    const draft = draftParts.get(slug);
+    if (saveIssue && saveIssue.scope === 'part' && saveIssue.slug === slug && saveIssue.partName === part.name) {
+      row.append(el('div', { class: 'le-issue' }, saveIssue.message));
+    }
+    // The draft model is a single space-separated string (the same shape the save payload and
+    // PartInfo.classes both use) — split into chips for editing, same as a cva class LIST, and
+    // rejoined back into that string on every add/remove.
+    const classes = draft[part.name].split(/\s+/).filter(Boolean);
+    const line = el('div', { class: 'le-part-chips' },
+      renderChipList(classes, {
+        onRemove: (cls) => { draft[part.name] = classes.filter((c) => c !== cls).join(' '); onComponentChange(slug); },
+        onAdd: (cls) => { if (!classes.includes(cls)) classes.push(cls); draft[part.name] = classes.join(' '); onComponentChange(slug); },
+      }));
+    if (part.dynamicTail) line.append(el('code', { class: 'le-part-tail', title: part.dynamicTail }, `+ ${part.dynamicTail}`));
+    row.append(line);
+    if (part.note) row.append(el('p', { class: 'le-hint le-part-note' }, part.note));
+    return row;
   }
   function renderAxisSection(slug, values, axis) {
     const section = el('section', { class: 'le-section', 'data-axis': axis });

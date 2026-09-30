@@ -72,6 +72,7 @@ async function libStudio(t: TestContext) {
     themeFile: join(root, 'app', 'globals.css'),
     buttonFile: join(root, 'src', 'ui', 'button.tsx'),
     badgeFile: join(root, 'src', 'ui', 'badge.tsx'),
+    dialogFile: join(root, 'src', 'ui', 'dialog.tsx'),
   };
 }
 
@@ -129,4 +130,71 @@ test('a read-only component (badge) is marked read-only in the rail and exposes 
   assert.equal(await page.locator('#le-editor-body .le-chip').count(), 0, 'a read-only component offers no editable chips');
   assert.equal(await page.locator('#le-editor-body input').count(), 0, 'a read-only component offers no editable inputs');
   assert.ok(await page.locator('#le-save').isDisabled(), 'selecting a read-only component must not make Save available');
+});
+
+// ---- Parts (Task 4) ---------------------------------------------------------------------------
+
+test('opening Dialog lists its parts: DialogContent editable with chips, DialogTrigger read-only with a reason', async t => {
+  const { page } = await libStudio(t);
+  const item = page.locator('.le-comp-item[data-slug="dialog"]');
+  await item.waitFor({ state: 'visible', timeout: 5000 });
+  // dialog.tsx has no cva() at all, so the rail must not flag it read-only (it still has editable
+  // parts) — only individual read-only parts inside the panel are marked.
+  assert.equal(await item.getAttribute('data-readonly'), null);
+  await item.click();
+  assert.equal(await page.locator('#le-editor-title').innerText(), 'Dialog');
+
+  const contentRow = page.locator('.le-part-row[data-part="DialogContent"]');
+  await contentRow.waitFor({ state: 'visible', timeout: 5000 });
+  const contentChipCount = await contentRow.locator('.le-chip').count();
+  assert.ok(contentChipCount > 1, 'DialogContent is editable and shows its existing classes as chips');
+  assert.equal(await contentRow.locator('input.le-in--sm').count(), 1, 'DialogContent offers a "+ class" input, like a variant chip list');
+  assert.match(await contentRow.locator('.le-part-tail').innerText(), /className/, 'DialogContent\'s dynamic tail (the cn(...) className arg) is shown muted beside the chips');
+
+  const triggerRow = page.locator('.le-part-row[data-part="DialogTrigger"]');
+  await triggerRow.waitFor({ state: 'visible', timeout: 5000 });
+  assert.equal(await triggerRow.locator('.le-chip').count(), 0, 'DialogTrigger (a plain DialogPrimitive.Trigger alias) is read-only: no chips');
+  assert.equal(await triggerRow.locator('input').count(), 0, 'DialogTrigger is read-only: no inputs');
+  assert.match(await triggerRow.innerText(), /Read-only:.*no static className found/i);
+});
+
+test('adding a class to DialogContent through the Parts chip editor and saving splices only that literal, byte-identical otherwise, and reload shows it persisted', async t => {
+  const { page, dialogFile } = await libStudio(t);
+  const before = readFileSync(dialogFile, 'utf8');
+  assert.doesNotMatch(before, /canon-part-e2e/);
+
+  const item = page.locator('.le-comp-item[data-slug="dialog"]');
+  await item.waitFor({ state: 'visible', timeout: 5000 });
+  await item.click();
+
+  const contentRow = page.locator('.le-part-row[data-part="DialogContent"]');
+  await contentRow.waitFor({ state: 'visible', timeout: 5000 });
+  const save = page.locator('#le-save');
+  assert.ok(await save.isDisabled(), 'Save starts disabled until something is dirty');
+
+  const addInput = contentRow.locator('input.le-in--sm');
+  await addInput.fill('canon-part-e2e');
+  await addInput.press('Enter');
+  assert.ok(await save.isEnabled(), 'editing a part\'s classes must mark the draft dirty');
+  assert.match(await contentRow.innerText(), /canon-part-e2e/, 'the new chip appears immediately in the draft');
+
+  await Promise.all([page.waitForResponse(r => r.url().endsWith('/api/lib/save')), save.click()]);
+  await page.waitForFunction(() => document.querySelector('#le-status')?.textContent === 'saved');
+
+  const after = readFileSync(dialogFile, 'utf8');
+  assert.notEqual(after, before, 'dialog.tsx must change on disk');
+  assert.match(after, /canon-part-e2e/);
+  // Only the DialogContent literal changed (one class appended to the end of the joined string) —
+  // stripping exactly that addition back out must reproduce the original file byte-for-byte.
+  assert.equal(after.replace(' canon-part-e2e', ''), before, 'every other byte of dialog.tsx is unchanged');
+
+  // A reload re-reads state fresh off disk — the edit must be genuinely persisted, not just an
+  // optimistic client-side update.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await item.waitFor({ state: 'visible', timeout: 5000 });
+  await item.click();
+  const reloadedRow = page.locator('.le-part-row[data-part="DialogContent"]');
+  await reloadedRow.waitFor({ state: 'visible', timeout: 5000 });
+  assert.match(await reloadedRow.innerText(), /canon-part-e2e/, 'the persisted class is shown after a fresh state load');
+  assert.ok(await page.locator('#le-save').isDisabled(), 'freshly-loaded state must not start dirty');
 });

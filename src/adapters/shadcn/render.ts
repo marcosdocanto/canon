@@ -20,10 +20,18 @@ function attrString(extraProps: Record<string, string> | undefined, axis?: { nam
   return parts.length ? ` ${parts.join(' ')}` : '';
 }
 
+// A square icon-sized variant (size "icon", "icon-xs", "icon-sm", "icon-lg", …) has no room for a
+// real word: the per-slug default children (e.g. button's "Delete") overflow the fixed h-*/w-*
+// square and spill outside its border. Any variant VALUE starting with "icon" — regardless of
+// which axis it's on or which slug it belongs to — gets this compact glyph instead, so the preview
+// always shows a tidy square rather than clipped/overflowing text.
+const ICON_VALUE = /^icon/;
+const ICON_GLYPH = '✕';
+
 /** Build one `<Tag ...>children</Tag>` snippet, optionally varying a single prop off its default. */
 function jsxFor(component: ComponentInfo, axis?: { name: string; value: string }): string {
   const template = TEMPLATES[component.slug] ?? {};
-  const children = template.children ?? '…';
+  const children = axis && ICON_VALUE.test(axis.value) ? ICON_GLYPH : (template.children ?? '…');
   return `<${component.exportName}${attrString(template.extraProps, axis)}>${children}</${component.exportName}>`;
 }
 
