@@ -410,3 +410,95 @@ export function parseCva(source: string, span: { start: number; end: number }): 
     defaultVariants: 'defaultVariants' in options ? asDefaultVariants(options.defaultVariants) : {},
   };
 }
+
+// ---- Printer + byte-exact splice write-back ---------------------------------------------------
+
+/** A plain identifier prints bare; anything else (e.g. `"2xl"`) prints as a quoted string literal. */
+function printKey(key: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
+}
+
+/** A single class-list entry prints as one double-quoted string; more than one prints as `[...]`. */
+function printClassValue(classes: string[]): string {
+  return classes.length === 1 ? JSON.stringify(classes[0]) : `[${classes.map((c) => JSON.stringify(c)).join(', ')}]`;
+}
+
+function printMatchValue(value: string | boolean): string {
+  return typeof value === 'boolean' ? String(value) : JSON.stringify(value);
+}
+
+const step = (indent: string, depth: number): string => indent + '  '.repeat(depth);
+
+/**
+ * Print a `CvaSpec` back into a `cva(...)` call expression, deterministically: `cva(\n` then the
+ * base classes (one double-quoted string, or `[...]` for more than one), then — only when any of
+ * `variants` / `compoundVariants` / `defaultVariants` is non-empty — a multi-line options object,
+ * each level stepping two spaces from `indent`. `compoundVariants` entries always print their
+ * class list under `class:` (never `className:`), per the printer's normalization ruling — the
+ * parser accepts either key on read, but the printer standardizes to one on write.
+ */
+export function printCva(spec: CvaSpec, indent: string): string {
+  const variantNames = Object.keys(spec.variants);
+  const defaultNames = Object.keys(spec.defaultVariants);
+  const hasOptions = variantNames.length > 0 || spec.compoundVariants.length > 0 || defaultNames.length > 0;
+
+  const lines: string[] = ['cva(', `${step(indent, 1)}${printClassValue(spec.base)},`];
+
+  if (hasOptions) {
+    lines.push(`${step(indent, 1)}{`);
+
+    if (variantNames.length > 0) {
+      lines.push(`${step(indent, 2)}variants: {`);
+      for (const name of variantNames) {
+        lines.push(`${step(indent, 3)}${printKey(name)}: {`);
+        for (const [optionName, classes] of Object.entries(spec.variants[name])) {
+          lines.push(`${step(indent, 4)}${printKey(optionName)}: ${printClassValue(classes)},`);
+        }
+        lines.push(`${step(indent, 3)}},`);
+      }
+      lines.push(`${step(indent, 2)}},`);
+    }
+
+    if (spec.compoundVariants.length > 0) {
+      lines.push(`${step(indent, 2)}compoundVariants: [`);
+      for (const { match, classes } of spec.compoundVariants) {
+        lines.push(`${step(indent, 3)}{`);
+        for (const [key, value] of Object.entries(match)) {
+          lines.push(`${step(indent, 4)}${printKey(key)}: ${printMatchValue(value)},`);
+        }
+        lines.push(`${step(indent, 4)}class: ${printClassValue(classes)},`);
+        lines.push(`${step(indent, 3)}},`);
+      }
+      lines.push(`${step(indent, 2)}],`);
+    }
+
+    if (defaultNames.length > 0) {
+      lines.push(`${step(indent, 2)}defaultVariants: {`);
+      for (const name of defaultNames) {
+        lines.push(`${step(indent, 3)}${printKey(name)}: ${printMatchValue(spec.defaultVariants[name])},`);
+      }
+      lines.push(`${step(indent, 2)}},`);
+    }
+
+    lines.push(`${step(indent, 1)}}`);
+  }
+
+  lines.push(`${indent})`);
+  return lines.join('\n');
+}
+
+/**
+ * Replace the `cva( … )` call at `span` in `source` with `spec`, printed. The replacement indent
+ * is the leading whitespace of the line containing `span.start` (not just the text immediately
+ * before `cva(`, so a call nested after other code on its line still picks up the line's own
+ * indentation). When `source` uses CRLF line endings (detected by the presence of any `\r\n`),
+ * the printed text's `\n`s are rewritten to `\r\n` to match. Everything outside `[span.start,
+ * span.end)` is passed through byte-for-byte.
+ */
+export function spliceCva(source: string, span: { start: number; end: number }, spec: CvaSpec): string {
+  const lineStart = source.lastIndexOf('\n', span.start - 1) + 1;
+  const indent = /^[ \t]*/.exec(source.slice(lineStart, span.start))![0];
+  let printed = printCva(spec, indent);
+  if (source.includes('\r\n')) printed = printed.replace(/\n/g, '\r\n');
+  return source.slice(0, span.start) + printed + source.slice(span.end);
+}
