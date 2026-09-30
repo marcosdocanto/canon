@@ -4,8 +4,35 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Canon library studio</title>
+<link rel="stylesheet" href="editor-lib.css">
 </head>
 <body>
-<p>Canon library studio — the theme and component editor lands here next.</p>
+<div class="le-app" id="le-app">
+  <aside class="le-rail">
+    <div class="le-rail__brand"><strong>Canon</strong><span>Library Studio</span></div>
+    <button type="button" class="le-nav-item" id="le-tab-theme" data-active="1">
+      <span class="le-nav-item__name">Theme</span>
+    </button>
+    <div class="le-rail__heading">Components</div>
+    <div class="le-comp-list" id="le-component-list"></div>
+  </aside>
+  <section class="le-editor">
+    <div class="le-editor__head">
+      <strong id="le-editor-title">Theme</strong>
+      <span class="le-editor__spacer"></span>
+      <span class="le-status" id="le-status"></span>
+      <button type="button" class="le-btn le-btn--primary" id="le-save" disabled>Save</button>
+    </div>
+    <div class="le-banner" id="le-banner" hidden></div>
+    <div class="le-editor__body" id="le-editor-body">
+      <p class="le-hint">Loading…</p>
+    </div>
+  </section>
+  <section class="le-preview">
+    <div class="le-preview__head">Preview</div>
+    <iframe class="le-preview__frame" id="le-preview-frame" title="Component preview"></iframe>
+  </section>
+</div>
+<script src="editor-lib.js"></script>
 </body>
 </html>
