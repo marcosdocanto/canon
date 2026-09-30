@@ -17,6 +17,10 @@ export const shadcnAdapter: Adapter = {
     const result = await exec('npx', ['shadcn@latest', 'add', '--yes', ...slugs], { cwd: root });
     if (result.status !== 0) throw new Error(`shadcn adapter: install failed (exit ${result.status}): ${result.stderr}`);
   },
+  async initProject(root, exec) {
+    const result = await exec('npx', ['shadcn@latest', 'init', '--yes', '-b', 'neutral'], { cwd: root });
+    if (result.status !== 0) throw new Error(`shadcn adapter: init failed (exit ${result.status}): ${result.stderr}`);
+  },
   renderSpec,
   describeVar: (name) => SEMANTIC_MAP[name],
   themeOverrides: themeToOverrides,

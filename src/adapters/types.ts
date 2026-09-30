@@ -25,6 +25,8 @@ export interface Adapter {
   inventory(root: string): ComponentInfo[];
   writeVariants(component: ComponentInfo, spec: CvaSpec): Write;
   install(root: string, slugs: string[], exec: ExecFn): Promise<void>;
+  /** Run the library's own project init (its first-run scaffolding command) through `exec`, for `canon init --lib` when `detect` finds nothing yet. */
+  initProject(root: string, exec: ExecFn): Promise<void>;
   renderSpec(component: ComponentInfo): RenderExample[];
   /** Canon semantic token name a theme var maps to, or undefined when the var isn't mapped. */
   describeVar(name: string): string | undefined;

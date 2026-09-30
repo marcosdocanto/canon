@@ -45,7 +45,7 @@ Usage
                                            Import the saved design or reuse this project's existing Canon
   canon init <name> [--preset canon|editorial|vera|clean|dark] [--prefix cn] [--brand #hex] [--action #hex]
              [--font "Geist"] [--radius 1] [--base 14] [--control 36] [--design design] [--force]
-  canon init <name> --lib shadcn [--preset canon|editorial|vera|clean|dark] [--root .] [--no-hooks]
+  canon init <name> --lib shadcn [--preset canon|editorial|vera|clean|dark] [--root .] [--no-hooks] [--force]
                                            Bootstrap onto an external component library instead of Canon's catalog
                                            (runs the library's own init when not already present, then seeds its theme from the preset)
   canon adopt [--root .] [--apply] [--no-hooks] [--design design]
@@ -110,7 +110,7 @@ async function main() {
         const { initLib } = await import('./init-lib.ts');
         const lib = flag('lib')!;
         const root = rootDir();
-        await initLib({ root, lib, preset: flag('preset'), name, exec: defaultExec, hooks: !has('no-hooks') });
+        await initLib({ root, lib, preset: flag('preset'), name, exec: defaultExec, hooks: !has('no-hooks'), force: has('force') });
         console.log(`✓ ${name} on ${lib} → ${root}`);
         console.log(`  design dir: design · stories: stories/canon`);
         console.log(`\nNext: canon studio --port 0 --open, or open the generated *.stories.tsx files, then commit.`);

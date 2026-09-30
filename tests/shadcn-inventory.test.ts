@@ -40,6 +40,28 @@ test('adapter install shells out through the injected exec', async () => {
   assert.deepEqual(calls[0][1], ['shadcn@latest', 'add', '--yes', 'button']);
 });
 
+test('adapter install surfaces a failed shadcn CLI invocation', async () => {
+  await assert.rejects(
+    () => shadcnAdapter.install('/tmp/x', ['button'], async () => ({ status: 1, stdout: '', stderr: 'network unreachable' })),
+    /shadcn adapter: install failed \(exit 1\): network unreachable/,
+  );
+});
+
+test('adapter initProject shells out the library\'s own init through the injected exec', async () => {
+  const calls: any[] = [];
+  await shadcnAdapter.initProject('/tmp/x', async (cmd, args, opts) => {
+    calls.push([cmd, args, opts]); return { status: 0, stdout: '', stderr: '' };
+  });
+  assert.deepEqual(calls[0], ['npx', ['shadcn@latest', 'init', '--yes', '-b', 'neutral'], { cwd: '/tmp/x' }]);
+});
+
+test('adapter initProject surfaces a failed shadcn CLI invocation', async () => {
+  await assert.rejects(
+    () => shadcnAdapter.initProject('/tmp/x', async () => ({ status: 1, stdout: '', stderr: 'boom' })),
+    /shadcn adapter: init failed \(exit 1\): boom/,
+  );
+});
+
 test('exportName skips SCREAMING_SNAKE_CASE exports and picks the real PascalCase one', (t) => {
   const root = clone(t);
   writeFileSync(join(root, 'src/ui/toast.tsx'), 'export const TOAST_LIMIT = 5;\nexport function Toast() { return null; }\n');

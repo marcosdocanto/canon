@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initLib, CORE_SLUGS } from '../src/init-lib.ts';
 import { findProject } from '../src/project.ts';
+import { shadcnAdapter } from '../src/adapters/shadcn/index.ts';
 import type { ExecFn } from '../src/adapters/types.ts';
 import { FIXTURE, clone } from './fixtures/clone.ts';
 
@@ -70,6 +71,80 @@ test('initLib: already detected -> skips the library\'s own init/add, still seed
   assert.equal(called, false, 'must not shell out when the library is already present');
   const newPrimary = primaryValue(readFileSync(join(root, 'app', 'globals.css'), 'utf8'));
   assert.notEqual(newPrimary, originalPrimary, 'theme is still seeded from the preset even when already detected');
+  assert.equal(findProject(root)?.adapter, 'shadcn');
+});
+
+test('initLib delegates the library\'s own project init to adapter.initProject — no hardcoded library literal in core', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'canon init-lib-delegate-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  // Monkeypatch the shadcn adapter singleton itself (restored in t.after): if `initLib` ever went
+  // back to shelling out directly with a literal `npx shadcn@latest init …` instead of calling
+  // through the adapter, these spies would never fire and this test would fail — the same way a
+  // second adapter's `initProject` would never be reached by a hardcoded shadcn literal in core.
+  const originalInitProject = shadcnAdapter.initProject;
+  const originalInstall = shadcnAdapter.install;
+  let initProjectRoot: string | undefined;
+  let installCalledWithCoreSlugs: string[] | undefined;
+  shadcnAdapter.initProject = async (r) => { initProjectRoot = r; cpSync(FIXTURE, r, { recursive: true }); };
+  shadcnAdapter.install = async (r, slugs) => { installCalledWithCoreSlugs = slugs; };
+  t.after(() => { shadcnAdapter.initProject = originalInitProject; shadcnAdapter.install = originalInstall; });
+
+  const neverCalled: ExecFn = async () => { throw new Error('initLib must not call exec directly; it must go through the adapter'); };
+
+  await initLib({ root, lib: 'shadcn', name: 'Delegate Test', exec: neverCalled, hooks: true });
+
+  assert.equal(initProjectRoot, root, 'initLib calls adapter.initProject(root, exec), not a literal exec call');
+  assert.deepEqual(installCalledWithCoreSlugs, CORE_SLUGS, 'initLib calls adapter.install(root, CORE_SLUGS, exec) via the adapter, unchanged');
+});
+
+test('initLib refuses to clobber an existing native design/system.json without --force', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'canon init-lib-guard-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'design'), { recursive: true });
+  const marker = JSON.stringify({ marker: "this repo's own native design" });
+  writeFileSync(join(root, 'design', 'system.json'), marker);
+
+  let execCalled = false;
+  const fakeExec: ExecFn = async () => { execCalled = true; return { status: 0, stdout: '', stderr: '' }; };
+
+  await assert.rejects(
+    () => initLib({ root, lib: 'shadcn', name: 'Guard Test', exec: fakeExec, hooks: true }),
+    /design[\\/]system\.json already exists.*--force/s,
+  );
+
+  assert.equal(readFileSync(join(root, 'design', 'system.json'), 'utf8'), marker, "the repo's own native design/system.json must be untouched");
+  assert.equal(execCalled, false, "must fail fast, before ever shelling out to the library's own init");
+  assert.equal(existsSync(join(root, '.canon', 'project.json')), false, 'no project config must be written on refusal');
+});
+
+test('initLib overwrites an existing native design/system.json when force is set', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'canon init-lib-force-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'design'), { recursive: true });
+  writeFileSync(join(root, 'design', 'system.json'), JSON.stringify({ marker: 'stale native design' }));
+
+  const fakeExec: ExecFn = async (cmd, args, opts) => { cpSync(FIXTURE, opts.cwd, { recursive: true }); return { status: 0, stdout: '', stderr: '' }; };
+
+  await initLib({ root, lib: 'shadcn', name: 'Force Test', exec: fakeExec, hooks: true, force: true });
+
+  assert.equal(findProject(root)?.adapter, 'shadcn');
+  const system = JSON.parse(readFileSync(join(root, 'design', 'system.json'), 'utf8'));
+  assert.notEqual(system.marker, 'stale native design', 'the stale native design/system.json must have been overwritten');
+});
+
+test('initLib re-running on an already adapter-managed design proceeds without --force', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'canon init-lib-readopt-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const fakeExec: ExecFn = async (cmd, args, opts) => { cpSync(FIXTURE, opts.cwd, { recursive: true }); return { status: 0, stdout: '', stderr: '' }; };
+
+  // First run bootstraps the adapter-managed design.
+  await initLib({ root, lib: 'shadcn', preset: 'canon', name: 'Readopt Test', exec: fakeExec, hooks: true });
+  assert.equal(findProject(root)?.adapter, 'shadcn');
+
+  // Second run: design/system.json now exists AND is adapter-managed -> must proceed without --force.
+  await assert.doesNotReject(() => initLib({ root, lib: 'shadcn', preset: 'vera', name: 'Readopt Test', exec: fakeExec, hooks: true }));
   assert.equal(findProject(root)?.adapter, 'shadcn');
 });
 
