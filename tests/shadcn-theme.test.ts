@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, rmSync, realpathSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, realpathSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readConfig } from '../src/adapters/shadcn/config.ts';
@@ -8,14 +8,7 @@ import { readTheme, writeTheme } from '../src/adapters/shadcn/theme.ts';
 import { systemToTheme } from '../src/adapters/shadcn/mapping.ts';
 import { installFiles } from '../src/design-files.ts';
 import { createSystem } from '../src/system.ts';
-
-const FIXTURE = new URL('./fixtures/shadcn-app', import.meta.url).pathname;
-const clone = (t: any) => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'canon shadcn-')));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  cpSync(FIXTURE, root, { recursive: true });
-  return root;
-};
+import { clone } from './fixtures/clone.ts';
 
 test('readConfig resolves custom aliases through tsconfig paths', (t) => {
   const root = clone(t);

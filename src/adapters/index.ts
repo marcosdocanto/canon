@@ -1,8 +1,9 @@
 import type { Adapter } from './types.ts';
+import { shadcnAdapter } from './shadcn/index.ts';
 
 export type { Adapter, LibraryTheme, CvaSpec, ComponentInfo, RenderExample, ExecFn } from './types.ts';
 
-export const ADAPTERS: Record<string, Adapter> = {}; // shadcn registers in Task 6
+export const ADAPTERS: Record<string, Adapter> = { shadcn: shadcnAdapter };
 
 export function getAdapter(id: string): Adapter {
   const adapter = ADAPTERS[id];
