@@ -62,7 +62,7 @@
   const draftComponents = new Map(); // slug -> CvaSpec, populated lazily the first time a component is opened
   let activeView = 'theme'; // 'theme' | a component slug
   let conflictFile = null; // set on a 409 save response
-  let saveIssue = null; // { slug?, message } from a 422 (or other) save failure
+  let saveIssue = null; // { scope: 'theme' | 'component' | null, slug?, message } from a 422 (or other) save failure
   let saving = false;
   let previewBlobUrl = null;
   let vocabReady = false;
@@ -157,6 +157,9 @@
   // ---------------------------------------------------------------- save
   async function save() {
     if (saving || !isDirty()) return;
+    // Clear both failure categories up front: a fresh attempt must never leave a stale banner
+    // (from an earlier 409) showing alongside — or instead of — this attempt's own result.
+    conflictFile = null; saveIssue = null;
     saving = true; refreshChrome();
     const payload = { hashes: state.hashes };
     if (isThemeDirty()) payload.theme = draftTheme;
@@ -168,7 +171,6 @@
         state = await res.json();
         draftTheme = clone(state.theme);
         draftComponents.clear();
-        conflictFile = null; saveIssue = null;
         status('saved');
         renderAll();
         loadFullPreview();
@@ -179,17 +181,27 @@
         conflictFile = body.file ?? 'a project file';
         status('save conflict', true);
       } else if (res.status === 422) {
+        // Two distinct shapes from serve-lib.ts's handleSave: a theme-level failure (the adapter's
+        // writeTheme threw, e.g. the CSS-injection guard) responds { field: 'theme', message };
+        // a component failure (unknown/read-only slug, or writeVariants threw) responds
+        // { slug, message }. Each needs its own persistent, in-panel rendering — see
+        // renderThemePanel/renderComponentPanel — not just the 4s transient status() line.
         const body = await res.json().catch(() => ({}));
-        saveIssue = { slug: body.slug, message: body.message ?? 'Save failed' };
-        if (body.slug && specOf(body.slug)) activeView = body.slug;
+        if (body.field === 'theme') {
+          saveIssue = { scope: 'theme', message: body.message ?? 'Save failed' };
+          activeView = 'theme';
+        } else {
+          saveIssue = { scope: 'component', slug: body.slug, message: body.message ?? 'Save failed' };
+          if (body.slug && specOf(body.slug)) activeView = body.slug;
+        }
         status('save failed', true);
       } else {
         const body = await res.json().catch(() => ({}));
-        saveIssue = { message: body.error ?? body.message ?? `Save failed (${res.status})` };
+        saveIssue = { scope: null, message: body.error ?? body.message ?? `Save failed (${res.status})` };
         status('save failed', true);
       }
     } catch (e) {
-      saveIssue = { message: e.message };
+      saveIssue = { scope: null, message: e.message };
       status('save failed', true);
     } finally {
       saving = false;
@@ -234,6 +246,7 @@
   function onThemeChange() { refreshChrome(); schedulePreview(); }
   function renderThemePanel() {
     const wrap = el('div', { class: 'le-stack' });
+    if (saveIssue && saveIssue.scope === 'theme') wrap.append(el('div', { class: 'le-issue' }, saveIssue.message));
     wrap.append(el('p', { class: 'le-theme-file' }, draftTheme.file));
     const entries = Object.entries(draftTheme.vars);
     const isColorVar = ([, v]) => isCssColor(v.light) || (v.dark !== undefined && isCssColor(v.dark));
@@ -255,6 +268,7 @@
     const wrap = el('div', { class: 'le-var-value' });
     const input = el('input', { type: 'text', class: 'le-in', 'data-var-key': key, spellcheck: 'false', value: value ?? '', placeholder: key === 'dark' ? 'same as light' : '' });
     let swatchEl = null;
+    let picker = null; // set below when this value is colorish; kept in sync from the text input too, so typing a hex doesn't get reverted the next time the picker is touched
     const updateSwatch = () => {
       const hex = normalizeCssColor(effective());
       if (hex) {
@@ -270,10 +284,14 @@
       else entry.dark = next;
       onThemeChange();
     };
-    input.addEventListener('input', () => { commit(input.value); updateSwatch(); });
+    input.addEventListener('input', () => {
+      commit(input.value); updateSwatch();
+      const hex = cssColorToHex(input.value);
+      if (picker && hex) picker.value = hex; // keep the picker in sync so touching it afterward doesn't revert a typed hex value
+    });
     wrap.append(input);
     if (isCssColor(value ?? fallback ?? '')) {
-      const picker = el('input', { type: 'color', class: 'le-color', value: cssColorToHex(value ?? fallback ?? '') ?? '#000000', 'aria-label': `${name} ${key}` });
+      picker = el('input', { type: 'color', class: 'le-color', value: cssColorToHex(value ?? fallback ?? '') ?? '#000000', 'aria-label': `${name} ${key}` });
       picker.addEventListener('input', () => { input.value = picker.value; commit(picker.value); updateSwatch(); });
       wrap.append(picker);
     } else {
@@ -327,7 +345,7 @@
     const info = specOf(slug);
     const wrap = el('div', { class: 'le-stack' });
     if (!info) { wrap.append(el('p', { class: 'le-hint le-hint--error' }, 'This component is no longer in the inventory — try Reload.')); return wrap; }
-    if (saveIssue && saveIssue.slug === slug) wrap.append(el('div', { class: 'le-issue' }, saveIssue.message));
+    if (saveIssue && saveIssue.scope === 'component' && saveIssue.slug === slug) wrap.append(el('div', { class: 'le-issue' }, saveIssue.message));
     wrap.append(el('div', { class: 'le-comp-meta' }, el('code', {}, info.importPath), el('span', { class: 'le-muted' }, info.exportName)));
     if (!info.cva) {
       wrap.append(el('p', { class: 'le-hint' }, info.readOnlyReason ? `Read-only: ${info.readOnlyReason}` : 'This component has no editable variants.'));
