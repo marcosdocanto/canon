@@ -44,6 +44,14 @@ In a bound Studio, **Save** atomically updates the design source, generated CSS 
 
 Screen layout, routes and application behavior remain agent work; Save does not rewrite or deploy the app. For design-source edits made outside Studio, run `canon sync`.
 
+## Library studio
+
+To use Canon styling with an existing component library, run `canon init --lib <template>` or `canon adopt` to adopt an existing library. Canon applies its styling on top of your components; in library mode, `canon studio` opens the library editor instead.
+
+The library editor has two tabs: **Theme** to define CSS variables with light and dark mode support, previewed against your repo's real component classes, and **Components** to edit CVA variant definitions for Canon-owned components (add or remove values, set defaults, adjust class lists); read-only components show why they cannot be edited.
+
+Canon saves transactionally—theme files and CVA blocks are rewritten in place with content outside Canon ownership unchanged, making concurrent application edits safe. A component file changed during editing triggers a 409 conflict and reload; reapply changes and save to continue. Canon owns CSS only (tokens and CVA); application logic, markup and behavior remain yours. Use `canon lint` to check style violations, `canon check` to verify the build, or `canon storybook` to review components during editing.
+
 ## Contribute
 
 Contributions to components, accessibility, performance, Studio, agent integrations and documentation are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), [component authoring](docs/AUTHORING.md) or [pattern authoring](docs/PATTERNS.md). Use an issue to report a reproducible problem or discuss a larger change, then open a focused pull request.
