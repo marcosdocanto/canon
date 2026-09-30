@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { VERSION } from './version.ts';
 import { PRESETS } from './tokens/presets.ts';
 import { findProject } from './project.ts';
+import type { ExecFn } from './adapters/types.ts';
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -19,7 +21,13 @@ function flag(name: string, def?: string): string | undefined {
 }
 const has = (name: string) => args.includes(`--${name}`) || args.some((a) => a.startsWith(`--${name}=`));
 const positional = args.slice(1).filter((a, i, arr) => !a.startsWith('--') && !(arr[i - 1]?.startsWith('--') && !arr[i - 1].includes('=') && !['true', 'false'].includes(a) && isFlagWithValue(arr[i - 1])));
-function isFlagWithValue(f: string) { return !['--force', '--no-install', '--json', '--quiet', '--fix', '--changed', '--annotate', '--hooks', '--no-hooks', '--open'].includes(f); }
+function isFlagWithValue(f: string) { return !['--force', '--no-install', '--json', '--quiet', '--fix', '--changed', '--annotate', '--hooks', '--no-hooks', '--open', '--apply'].includes(f); }
+
+/** Default `ExecFn` for adapters/generators that shell out (`canon init --lib`, `add` in library mode, `storybook`). */
+const defaultExec: ExecFn = async (execCmd, execArgs, opts) => {
+  const result = spawnSync(execCmd, execArgs, { cwd: opts.cwd, encoding: 'utf8' });
+  return { status: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? (result.error ? String(result.error.message) : '') };
+};
 
 const rootDir = () => resolve(flag('root') ?? findProject(process.cwd())?.root ?? '.');
 const designDir = () => {
@@ -37,7 +45,14 @@ Usage
                                            Import the saved design or reuse this project's existing Canon
   canon init <name> [--preset canon|editorial|vera|clean|dark] [--prefix cn] [--brand #hex] [--action #hex]
              [--font "Geist"] [--radius 1] [--base 14] [--control 36] [--design design] [--force]
+  canon init <name> --lib shadcn [--preset canon|editorial|vera|clean|dark] [--root .] [--no-hooks]
+                                           Bootstrap onto an external component library instead of Canon's catalog
+                                           (runs the library's own init when not already present, then seeds its theme from the preset)
+  canon adopt [--root .] [--apply] [--no-hooks] [--design design]
+                                           Import an existing repo that already uses a supported library (shadcn/ui today)
+                                           Plans by default; pass --apply to write the design dir, theme-derived tokens and agent files
   canon build [--design design]            Compile tokens → css, tailwind, react, gallery, DESIGN.md, agent files
+                                           (or, in an adopted/--lib project: DESIGN.md + agent files + Storybook stories from the library's own code)
   canon install [--design design] [--root .] [--no-hooks]
                                            Put DESIGN.md, AGENTS.md/CLAUDE.md blocks, skill, cursor rules, MCP config and lint hook in a project
   canon sync                               build + install
@@ -46,6 +61,9 @@ Usage
   canon check                              Fail if dist is stale or lint fails (CI / pre-commit)
   canon mcp [--design design]              MCP server (stdio) exposing tokens, components, rules and lint to any agent
   canon add <component-slug>               Add a catalog component missing from the design dir
+                                           (in an adopted/--lib project: installs it through the library's own CLI instead)
+  canon storybook [--root .]               Ensure Storybook is installed, then (re)generate one story per inventoried component
+                                           (adopted/--lib projects only)
   canon presets                            List presets
   canon studio [--root .] [--port 4600] [--open]
                                            Edit this project's design and save its styles and agent references
@@ -54,6 +72,8 @@ Usage
 
 Examples
   canon init "Vera" --preset vera --prefix vera && canon install
+  canon init "My App" --lib shadcn --preset vera && canon storybook
+  canon adopt && canon adopt --apply
   canon lint src app
   canon mcp --design ./design   (register in .mcp.json; canon install does it)
 `;
@@ -84,10 +104,20 @@ async function main() {
       return;
     }
     case 'init': {
-      const { createSystem, writeDesignDir } = await import('./system.ts');
-      const { buildSystem } = await import('./build.ts');
       const name = positional[0] ?? flag('name');
       if (!name) { console.error('canon init <name> — a name is required.'); process.exit(2); }
+      if (has('lib')) {
+        const { initLib } = await import('./init-lib.ts');
+        const lib = flag('lib')!;
+        const root = rootDir();
+        await initLib({ root, lib, preset: flag('preset'), name, exec: defaultExec, hooks: !has('no-hooks') });
+        console.log(`✓ ${name} on ${lib} → ${root}`);
+        console.log(`  design dir: design · stories: stories/canon`);
+        console.log(`\nNext: canon studio --port 0 --open, or open the generated *.stories.tsx files, then commit.`);
+        return;
+      }
+      const { createSystem, writeDesignDir } = await import('./system.ts');
+      const { buildSystem } = await import('./build.ts');
       const dir = resolve(flag('design', 'design')!);
       if (existsSync(join(dir, 'system.json')) && !has('force')) {
         console.error(`${dir}/system.json already exists. Use --force to overwrite (components you customized will be reset).`);
@@ -116,11 +146,28 @@ async function main() {
       console.log(`\nNext: open ${join(r.outDir, 'preview.html')} to see everything, then \`canon install\` to wire agents.`);
       return;
     }
+    case 'adopt': {
+      const { adopt } = await import('./adopt.ts');
+      const root = rootDir();
+      const result = await adopt({ root, apply: has('apply'), hooks: !has('no-hooks'), design: flag('design') });
+      for (const line of result.plan) console.log(line);
+      console.log(result.applied
+        ? `\n✓ applied — adapter-mode Canon project ready at ${root}`
+        : '\n(dry run — nothing was written; pass --apply to write these files)');
+      return;
+    }
     case 'build': {
       const { loadDesignDir } = await import('./system.ts');
-      const { buildSystem } = await import('./build.ts');
       const dir = designDir();
       const system = loadDesignDir(dir);
+      const project = findProject(rootDir()) ?? findProject(dir);
+      if (project?.adapter) {
+        const { buildLib } = await import('./build-lib.ts');
+        await buildLib(project.root, dir);
+        console.log(`✓ built library-mode dist → ${join(dir, system.meta.out || 'dist')}`);
+        return;
+      }
+      const { buildSystem } = await import('./build.ts');
       const r = await buildSystem(system, dir, { only: flag('only')?.split(',') });
       report(r);
       return;
@@ -128,12 +175,22 @@ async function main() {
     case 'install':
     case 'sync': {
       const { loadDesignDir } = await import('./system.ts');
-      const { buildSystem } = await import('./build.ts');
       const { install } = await import('./install.ts');
       const dir = designDir();
       const system = loadDesignDir(dir);
-      if (cmd === 'sync') report(await buildSystem(system, dir));
-      const res = install(system, dir, { root: rootDir(), hooks: !has('no-hooks') });
+      const root = rootDir();
+      if (cmd === 'sync') {
+        const project = findProject(root) ?? findProject(dir);
+        if (project?.adapter) {
+          const { buildLib } = await import('./build-lib.ts');
+          await buildLib(project.root, dir);
+          console.log(`✓ built library-mode dist → ${join(dir, system.meta.out || 'dist')}`);
+        } else {
+          const { buildSystem } = await import('./build.ts');
+          report(await buildSystem(system, dir));
+        }
+      }
+      const res = install(system, dir, { root, hooks: !has('no-hooks') });
       for (const l of res.log) console.log(l);
       return;
     }
@@ -187,18 +244,44 @@ async function main() {
       return;
     }
     case 'add': {
+      const slug = positional[0];
+      if (!slug) { console.error('canon add <component-slug> — a slug is required.'); process.exit(2); }
+      const root = rootDir();
+      const project = findProject(root);
+      if (project?.adapter) {
+        const { getAdapter } = await import('./adapters/index.ts');
+        const adapter = getAdapter(project.adapter);
+        await adapter.install(project.root, [slug], defaultExec);
+        console.log(`✓ ${adapter.id} add ${slug} — run canon build`);
+        return;
+      }
       const { loadDesignDir } = await import('./system.ts');
       const { loadCatalog } = await import('./components/index.ts');
       const CATALOG = await loadCatalog();
       const { writeFileSync } = await import('node:fs');
       const dir = designDir();
       const system = loadDesignDir(dir);
-      const slug = positional[0];
       const spec = CATALOG.find((c) => c.slug === slug);
       if (!spec) { console.error(`Unknown component "${slug}". Available: ${CATALOG.map((c) => c.slug).join(', ')}`); process.exit(2); }
       if (system.components.some((c) => c.slug === slug) && !has('force')) { console.error(`${slug} already exists in ${dir}/components. Use --force to reset it.`); process.exit(2); }
       writeFileSync(join(dir, 'components', `${slug}.json`), JSON.stringify(spec, null, 2) + '\n');
       console.log(`✓ added components/${slug}.json — run canon build`);
+      return;
+    }
+    case 'storybook': {
+      const root = rootDir();
+      const project = findProject(root);
+      if (!project?.adapter) { console.error(`No adapter configured for ${root}. Run \`canon adopt\` or \`canon init --lib <id>\` first.`); process.exit(2); }
+      const { getAdapter } = await import('./adapters/index.ts');
+      const { ensureStorybook, storyWrites } = await import('./generators/stories.ts');
+      const { installFiles } = await import('./design-files.ts');
+      const adapter = getAdapter(project.adapter);
+      const status = await ensureStorybook(project.root, defaultExec);
+      console.log(`✓ storybook ${status}`);
+      const components = adapter.inventory(project.root);
+      const writes = storyWrites(project.root, adapter, components);
+      if (writes.length) installFiles(project.root, writes);
+      console.log(`✓ wrote ${writes.length} ${writes.length === 1 ? 'story' : 'stories'} → stories/canon/`);
       return;
     }
     case 'serve':

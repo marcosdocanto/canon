@@ -1,5 +1,5 @@
 import type { Write } from '../design-files.ts';
-import type { DeepPartial, Tokens } from '../types.ts';
+import type { DeepPartial, System, Tokens } from '../types.ts';
 
 /** CSS custom property theme configuration for a library. */
 export interface LibraryTheme { file: string; vars: Record<string, { light: string; dark?: string }>; }
@@ -30,4 +30,13 @@ export interface Adapter {
   describeVar(name: string): string | undefined;
   /** Map a library theme's own values onto Canon token overrides (for `canon adopt`'s seeds.overrides). */
   themeOverrides(theme: LibraryTheme): DeepPartial<Tokens>;
+  /**
+   * Map a Canon System's resolved tokens onto the library's own theme file, as `Write`s (not yet
+   * applied — pass to `installFiles`). The one place library mode overwrites the theme file: used
+   * by `canon init --lib` to seed the library's theme from the chosen preset. `canon adopt` never
+   * calls this — it only ever reads the existing theme via `readTheme`/`themeOverrides`. Kept on
+   * the adapter contract (rather than a bare `systemToTheme` export) so core files never import
+   * `./adapters/shadcn/**`.
+   */
+  applyTheme(root: string, system: System): Write[];
 }
