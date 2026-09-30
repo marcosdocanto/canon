@@ -52,7 +52,7 @@ test('adapter initProject shells out the library\'s own init through the injecte
   await shadcnAdapter.initProject('/tmp/x', async (cmd, args, opts) => {
     calls.push([cmd, args, opts]); return { status: 0, stdout: '', stderr: '' };
   });
-  assert.deepEqual(calls[0], ['npx', ['shadcn@latest', 'init', '--yes', '-b', 'radix'], { cwd: '/tmp/x' }]);
+  assert.deepEqual(calls[0], ['npx', ['shadcn@latest', 'init', '--yes', '-b', 'radix', '-p', 'nova'], { cwd: '/tmp/x' }]);
 });
 
 test('adapter initProject surfaces a failed shadcn CLI invocation', async () => {

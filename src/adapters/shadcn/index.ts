@@ -19,7 +19,7 @@ export const shadcnAdapter: Adapter = {
   },
   async initProject(root, exec) {
     // shadcn ≥4.21: -b selects the component library (radix = classic shadcn); base color prompts are skipped by --yes.
-    const result = await exec('npx', ['shadcn@latest', 'init', '--yes', '-b', 'radix'], { cwd: root });
+    const result = await exec('npx', ['shadcn@latest', 'init', '--yes', '-b', 'radix', '-p', 'nova'], { cwd: root });
     if (result.status !== 0) throw new Error(`shadcn adapter: init failed (exit ${result.status}): ${result.stderr}`);
   },
   renderSpec,
