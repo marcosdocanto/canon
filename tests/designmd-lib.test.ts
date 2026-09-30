@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import { createSystem } from '../src/system.ts';
 import { readTheme } from '../src/adapters/shadcn/theme.ts';
 import { inventory } from '../src/adapters/shadcn/inventory.ts';
+import { getAdapter } from '../src/adapters/index.ts';
 import { designmdLib } from '../src/generators/designmd-lib.ts';
 import { agentsLibBlock } from '../src/generators/agents-lib.ts';
 import { clone } from './fixtures/clone.ts';
+
+const describeVar = getAdapter('shadcn').describeVar;
 
 // Verbatim per the plan's ownership rule (must appear byte-for-byte in generated docs).
 const OWNERSHIP_RULE = 'Style blocks (`cva()` calls in the ui directory and the CSS variables in the theme file) are Canon territory — change them through Canon (Studio or `canon` CLI), never by hand. Everything else in a component file is application territory — Canon never touches it.';
@@ -16,7 +19,7 @@ test('designmdLib documents the real import path, theme vars, read-only componen
   const theme = readTheme(root);
   const components = inventory(root);
 
-  const { full, compact } = designmdLib(system, theme, components);
+  const { full, compact } = designmdLib(system, theme, components, describeVar);
 
   // Real import path from the inventory, not a Canon-invented one.
   assert.match(full, /~\/ui\/button/);

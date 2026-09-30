@@ -35,7 +35,7 @@ export async function buildLib(root: string, designDir: string): Promise<void> {
   const distWrites: Write[] = [];
   const write = (rel: string, content: string) => distWrites.push({ root: designDir, path: join(dist, rel), content: Buffer.from(content) });
 
-  const { full, compact } = designmdLib(system, theme, components);
+  const { full, compact } = designmdLib(system, theme, components, (name) => adapter.describeVar(name));
   write('DESIGN.md', full);
   write('DESIGN.compact.md', compact);
   generateAgentsLib(system, theme, components, write);
