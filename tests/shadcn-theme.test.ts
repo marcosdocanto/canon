@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, realpathSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readConfig } from '../src/adapters/shadcn/config.ts';
@@ -55,4 +55,65 @@ test('systemToTheme maps canon semantics onto shadcn vars', async (t) => {
   assert.notEqual(mapped.vars.primary.light, 'oklch(0.205 0 0)'); // replaced
   assert.equal(typeof mapped.vars.radius.light, 'string');
   assert.ok(mapped.vars.ring.light);
+});
+
+// Tailwind v3-era shadcn wraps :root/.dark in @layer base — the majority of pre-2025 repos.
+const V3_CSS = `@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* team notes: keep the keyframes */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --radius: 0.5rem;
+  }
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+  }
+}
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+`;
+
+test('readTheme reads @layer base wrapped :root/.dark (v3-style globals.css)', (t) => {
+  const root = clone(t);
+  writeFileSync(join(root, 'app/globals.css'), V3_CSS);
+  const theme = readTheme(root);
+  assert.equal(theme.vars.background.light, '0 0% 100%');
+  assert.equal(theme.vars.background.dark, '240 10% 3.9%');
+  assert.equal(theme.vars.radius.light, '0.5rem');
+  assert.equal(theme.vars.radius.dark, undefined);
+});
+
+test('writeTheme splices inside @layer base preserving everything else', (t) => {
+  const root = clone(t);
+  const file = join(root, 'app/globals.css');
+  writeFileSync(file, V3_CSS);
+  const theme = readTheme(root);
+  theme.vars.primary = { light: '262 83% 58%', dark: '263 70% 70%' };
+  theme.vars.ring = { light: '262 83% 58%' }; // new var → appended inside the wrapped :root
+  installFiles(root, writeTheme(root, theme));
+  const css = readFileSync(file, 'utf8');
+  assert.match(css, /--primary: 262 83% 58%;/);
+  assert.match(css, /--ring: 262 83% 58%;/);
+  assert.match(css, /@tailwind base;/);                    // header preserved
+  assert.match(css, /team notes: keep the keyframes/);     // comment preserved
+  assert.match(css, /@apply border-border;/);              // sibling @layer body preserved
+  assert.match(css, /@keyframes spin-slow/);               // trailing rule preserved
+  // the appended --ring landed INSIDE the @layer's :root, not at top level
+  const layerStart = css.indexOf('@layer base');
+  const layerEnd = css.indexOf('}', css.indexOf('.dark'));
+  assert.ok(css.indexOf('--ring:') > layerStart && css.indexOf('--ring:') < layerEnd);
+  // idempotent round trip
+  const again = writeTheme(root, readTheme(root));
+  installFiles(root, again);
+  assert.equal(readFileSync(file, 'utf8'), css);
 });

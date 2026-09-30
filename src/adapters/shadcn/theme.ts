@@ -62,6 +62,29 @@ function topLevelBlocks(css: string): CssBlock[] {
   return blocks;
 }
 
+/**
+ * The blocks that may hold managed theme vars: every top-level block plus, one level deep,
+ * the blocks inside `@layer …` — Tailwind v3-era shadcn wraps `:root`/`.dark` in `@layer base`.
+ * Nested block offsets are absolute within the original css text. Other `@`-rules
+ * (`@theme`, `@media`, `@keyframes`) are never expanded.
+ */
+function candidateBlocks(css: string): CssBlock[] {
+  const blocks: CssBlock[] = [];
+  for (const block of topLevelBlocks(css)) {
+    blocks.push(block);
+    if (!/^@layer\b/.test(block.selector)) continue;
+    for (const inner of topLevelBlocks(block.body)) {
+      blocks.push({
+        selector: inner.selector,
+        body: inner.body,
+        bodyStart: block.bodyStart + inner.bodyStart,
+        bodyEnd: block.bodyStart + inner.bodyEnd,
+      });
+    }
+  }
+  return blocks;
+}
+
 const VAR_DECL = /--([A-Za-z0-9-]+)\s*:\s*([^;]+);/g;
 
 type ManagedKind = 'root' | 'dark';
@@ -86,7 +109,7 @@ function managedKind(selector: string): ManagedKind | undefined {
 export function parseVarBlocks(css: string): { root: Map<string, string>; dark: Map<string, string> } {
   const root = new Map<string, string>();
   const dark = new Map<string, string>();
-  for (const block of topLevelBlocks(css)) {
+  for (const block of candidateBlocks(css)) {
     const kind = managedKind(block.selector);
     if (!kind) continue;
     const target = kind === 'root' ? root : dark;
@@ -155,7 +178,7 @@ export function writeTheme(root: string, theme: LibraryTheme): Write[] {
   const css = readFileSync(file, 'utf8');
 
   const spans: { start: number; end: number; text: string }[] = [];
-  for (const block of topLevelBlocks(css)) {
+  for (const block of candidateBlocks(css)) {
     const kind = managedKind(block.selector);
     if (!kind) continue;
 
