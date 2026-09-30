@@ -1,10 +1,26 @@
 // shadcn/ui "parts" parsing: for components with no cva() (or for a cva component's plain sibling
-// exports), each exported PascalCase subcomponent's ROOT JSX element carries its own static
-// className literal. This module extracts that literal (the "safe subset" from the design doc —
-// docs/superpowers/specs/2026-09-30-part-styles-editing-design.md) and splices an edited value back.
+// exports), each exported PascalCase subcomponent's JSX carries its own static className literal.
+// This module extracts that literal (the "safe subset" from the design doc —
+// docs/superpowers/specs/2026-09-30-part-styles-editing-design.md, as amended by the controller
+// ruling below) and splices an edited value back.
+//
+// Ruling (amends the design doc's "root-only v1" text): a part's editable element is the FIRST JSX
+// element in DOCUMENT ORDER within the subcomponent's return that carries a static className
+// literal — not necessarily the root. A wrapper element with no className (e.g. shadcn's
+// `<DialogContent>` returning `<DialogPortal><DialogOverlay /><DialogPrimitive.Content
+// className={...}>`, where the root `<DialogPortal>` has none) is skipped and the walk descends
+// into its DIRECT JSX children, in source order, until it finds one. An element whose className IS
+// present but doesn't resolve under the safe subset (dynamic, escaped-quote, interpolated) does not
+// qualify either — the walk keeps descending — but its resolution is kept as a last-resort
+// `readOnlyReason` fallback (the EARLIEST one encountered) in case no element in the whole return
+// ever qualifies. `{expression}` children are opaque: never descended into looking for embedded
+// JSX, since that would mean evaluating arbitrary JS rather than staying a scanner.
+//
 // Reuses cva.ts's comment/string/template/regex-aware scanner (`skipNonCode`, `IDENT_CHAR`) so this
 // walker never mistakes a `<` or a quote inside a string/comment/template for real code — the same
-// discipline that makes `findCva` safe to run over arbitrary source.
+// discipline that makes `findCva` safe to run over arbitrary source. Still a scanner (a bounded,
+// source-order walk), not a full JSX AST: it understands just enough tag/attribute/children
+// structure to recurse, not general JSX semantics.
 import type { PartInfo } from '../types.ts';
 import { IDENT_CHAR, skipNonCode } from './cva.ts';
 
@@ -274,26 +290,26 @@ function locateJsxStart(source: string, start: number, end: number): number | un
   return jsxStart < end && source[jsxStart] === '<' ? jsxStart : undefined;
 }
 
-// ---- Root tag / className attribute scanning ----------------------------------------------------
+// ---- JSX tag / className attribute scanning, and the document-order descent ----------------------
 
 interface AttrValue { kind: 'string' | 'template' | 'expr'; start: number; end: number; }
 
 /**
- * Scan the JSX opening tag starting at `tagStart` (index of its `<`) for a `className` attribute,
- * returning its raw value span (including the delimiters — quotes, backticks, or `{ }`) if present.
- * Only the root tag's OWN attribute list is scanned (stops at the tag's `>`/`/>`); nested elements
- * are never visited. Spread attributes (`{...props}`) and other attributes' expression values are
- * skipped as balanced `{ … }` so a stray `>` or quote inside one can never end the tag early.
+ * Scan a JSX opening tag starting at `tagStart` (index of its `<`) for a `className` attribute,
+ * returning its raw value span (including the delimiters — quotes, backticks, or `{ }`) if present,
+ * plus where THIS tag's own opening-tag markup ends and whether it was self-closing. Spread
+ * attributes (`{...props}`) and other attributes' expression values are skipped as balanced `{ … }`
+ * so a stray `>` or quote inside one can never end the tag early.
  */
-function findRootClassNameAttr(source: string, tagStart: number, limit: number): AttrValue | undefined {
+function scanOpenTag(source: string, tagStart: number, limit: number): { attr?: AttrValue; end: number; selfClosing: boolean } {
   let i = tagStart + 1;
-  while (i < limit && (IDENT_CHAR.test(source[i] ?? '') || source[i] === '.')) i++; // tag name
-  let found: AttrValue | undefined;
+  while (i < limit && (IDENT_CHAR.test(source[i] ?? '') || source[i] === '.')) i++; // tag name (empty for a fragment `<>`)
+  let attr: AttrValue | undefined;
   while (i < limit) {
     i = skipWsAndComments(source, i, limit);
     if (i >= limit) break;
-    if (source[i] === '/' && source[i + 1] === '>') return found; // self-closing
-    if (source[i] === '>') return found; // open tag ends (has children)
+    if (source[i] === '/' && source[i + 1] === '>') return { attr, end: i + 2, selfClosing: true };
+    if (source[i] === '>') return { attr, end: i + 1, selfClosing: false };
     if (source[i] === '{') { i = skipBraces(source, i); continue; } // {...spread}
     const nameStart = i;
     while (i < limit && (IDENT_CHAR.test(source[i] ?? '') || source[i] === '-')) i++;
@@ -310,23 +326,67 @@ function findRootClassNameAttr(source: string, tagStart: number, limit: number):
     else if (c === '`') { valueEnd = skipNonCode(source, i)!; kind = 'template'; }
     else if (c === '{') { valueEnd = skipBraces(source, i); kind = 'expr'; }
     else { i++; continue; } // unexpected attribute-value shape; skip defensively
-    if (attrName === 'className' && found === undefined) found = { kind, start: i, end: valueEnd };
+    if (attrName === 'className' && attr === undefined) attr = { kind, start: i, end: valueEnd };
     i = valueEnd;
   }
-  return found;
+  return { attr, end: i, selfClosing: false }; // ran off the end (malformed/truncated input): treat as closed here
+}
+
+interface JsxWalkResult { end: number; part?: PartInfo; fallback?: PartInfo; }
+
+/**
+ * Walk one JSX element — starting at `tagStart` (index of its `<`) — looking for the first
+ * className that resolves to a static literal, per the ruling above: this element's own className
+ * first, then its DIRECT JSX children in source order (never descending into a `{expression}`
+ * child). Returns the index right after this element's own markup ends (its `/>`, or its matching
+ * closing tag), plus either `part` (a fully-resolved literal — the caller's search is over) or
+ * `fallback` (the EARLIEST non-qualifying className resolution found anywhere in this element's own
+ * subtree, kept only as a last-resort reason if nothing qualifies in the whole return).
+ */
+function walkJsxElement(name: string, source: string, tagStart: number, limit: number): JsxWalkResult {
+  const { attr, end: openEnd, selfClosing } = scanOpenTag(source, tagStart, limit);
+
+  let fallback: PartInfo | undefined;
+  if (attr) {
+    const resolved = resolveAttrValue(name, source, attr);
+    if (resolved.classes !== undefined) return { end: openEnd, part: resolved };
+    fallback = resolved; // dynamic/escaped/interpolated — a candidate reason, not a match
+  }
+  if (selfClosing) return { end: openEnd, fallback };
+
+  // Open tag with children: scan for direct JSX children (recursing into each), until OUR closing
+  // tag. Any `</…>` this loop sees directly (not already consumed by a recursive call) must be ours
+  // — every nested element's own closing tag is fully consumed by its own recursive call first.
+  let i = openEnd;
+  while (i < limit) {
+    const skipped = skipNonCode(source, i);
+    if (skipped !== undefined) { i = skipped; continue; }
+    if (source[i] === '{') { i = skipBraces(source, i); continue; } // opaque expression child
+    if (source[i] === '<' && source[i + 1] === '/') {
+      const closeGt = source.indexOf('>', i);
+      return { end: closeGt === -1 ? limit : closeGt + 1, fallback };
+    }
+    if (source[i] === '<') {
+      const child = walkJsxElement(name, source, i, limit);
+      if (child.part) return { end: child.end, part: child.part };
+      if (!fallback) fallback = child.fallback;
+      i = child.end;
+      continue;
+    }
+    i++; // plain JSX text content
+  }
+  return { end: limit, fallback }; // ran off the end without finding our own closing tag
 }
 
 // ---- className value -> PartInfo resolution -------------------------------------------------------
 
+// Trailing trim is whitespace-only: a comment between a value and its following `,`/`)` is not a
+// shape this adapter needs to support. Leading trim reuses `skipWsAndComments` (comment-aware) since
+// a leading comment before an argument — e.g. `cn(\n  /* canon-allow */\n  "…", className)` — is
+// real and must not be mistaken for the start of that argument's own text.
 function trimEnd(source: string, start: number, limit: number): number {
   let j = limit;
   while (j > start && /\s/.test(source[j - 1])) j--;
-  return j;
-}
-
-function trimStart(source: string, start: number, limit: number): number {
-  let j = start;
-  while (j < limit && /\s/.test(source[j])) j++;
   return j;
 }
 
@@ -364,7 +424,7 @@ function splitTopLevelArgs(source: string, start: number, end: number): { start:
   const args: { start: number; end: number }[] = [];
   let depth = 0, segStart = start, i = start;
   const push = (from: number, to: number): void => {
-    const s = trimStart(source, from, to);
+    const s = skipWsAndComments(source, from, to);
     const e = trimEnd(source, s, to);
     if (s < e) args.push({ start: s, end: e });
   };
@@ -390,7 +450,7 @@ function splitTopLevelArgs(source: string, start: number, end: number): { start:
  * `readOnlyReason: 'dynamic classes only'`, per the spec's safe subset.
  */
 function exprPart(name: string, source: string, braceStart: number, braceEnd: number): PartInfo {
-  const contentStart = trimStart(source, braceStart + 1, braceEnd - 1);
+  const contentStart = skipWsAndComments(source, braceStart + 1, braceEnd - 1);
   const contentEnd = trimEnd(source, contentStart, braceEnd - 1);
   if (contentStart >= contentEnd) return { name, readOnlyReason: 'dynamic classes only' };
 
@@ -423,22 +483,27 @@ function resolveAttrValue(name: string, source: string, attr: AttrValue): PartIn
 
 /**
  * Parse `source` (one component file) into one `PartInfo` per exported PascalCase subcomponent, per
- * the design doc's safe subset: only the subcomponent's ROOT JSX element's `className` is
- * considered. A subcomponent with no traceable JSX (a plain alias like `const Dialog =
- * DialogPrimitive.Root`), or whose root element carries no `className` attribute at all (including
- * when only a NESTED element does — v1 is root-only), gets `readOnlyReason: 'root element has no
- * static className'`. A `className` expression with no leading string literal (a helper-const
- * reference, a `cva`-variants call, a ternary, …) gets `readOnlyReason: 'dynamic classes only'`. A
- * literal containing a backslash escape is refused rather than decoded: `readOnlyReason: 'escaped
- * quote in literal'`.
+ * the design doc's safe subset as amended by the controller ruling (see the file header): the part's
+ * editable element is the FIRST element in document order — within the subcomponent's own return,
+ * bounded the same way the export scanner bounds a component's window, so this never crosses into a
+ * sibling subcomponent — that carries a static className literal, descending through className-less
+ * wrapper elements (and past elements whose className fails to resolve) to find it.
+ *
+ * A subcomponent with no traceable JSX at all (a plain alias like `const Dialog =
+ * DialogPrimitive.Root`), or whose entire return has no element with a className attribute anywhere,
+ * gets `readOnlyReason: 'no static className found'`. When at least one element's className is
+ * present but doesn't resolve under the safe subset, the EARLIEST such failure's own reason is used
+ * instead — `'dynamic classes only'` (a helper-const reference, a `cva`-variants call, a ternary, no
+ * leading string literal, …), `'template interpolation'`, or `'escaped quote in literal'` (a literal
+ * containing a backslash escape is refused rather than decoded) — even if a later, different failure
+ * also occurred deeper in the tree.
  */
 export function parseParts(source: string): PartInfo[] {
   return componentWindows(source).map(({ name, start, end }) => {
     const jsxStart = locateJsxStart(source, start, end);
-    if (jsxStart === undefined) return { name, readOnlyReason: 'root element has no static className' };
-    const attr = findRootClassNameAttr(source, jsxStart, end);
-    if (!attr) return { name, readOnlyReason: 'root element has no static className' };
-    return resolveAttrValue(name, source, attr);
+    if (jsxStart === undefined) return { name, readOnlyReason: 'no static className found' };
+    const result = walkJsxElement(name, source, jsxStart, end);
+    return result.part ?? result.fallback ?? { name, readOnlyReason: 'no static className found' };
   });
 }
 

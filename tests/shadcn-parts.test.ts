@@ -56,14 +56,19 @@ test('pure-behavior aliases (Dialog/DialogTrigger/DialogPortal/DialogClose) have
     const part = byName(parts, name);
     assert.equal(part.classes, undefined, `${name} must not have classes`);
     assert.equal(part.span, undefined);
-    assert.equal(part.readOnlyReason, 'root element has no static className');
+    assert.equal(part.readOnlyReason, 'no static className found');
   }
 });
 
-test('DialogContent is nested-only (root is <DialogPortal>, which carries no className) — root-only v1, same reason', () => {
+test('DialogContent: root <DialogPortal> has no className, so the descent finds the real literal on the nested <DialogPrimitive.Content>', () => {
   const content = byName(parseParts(DIALOG), 'DialogContent');
-  assert.equal(content.classes, undefined);
-  assert.equal(content.readOnlyReason, 'root element has no static className');
+  assert.equal(content.classes, 'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg');
+  assert.equal(content.dynamicTail, 'className');
+  assert.ok(content.span, 'DialogContent has a span once it descends to the real literal');
+  assert.equal(DIALOG.slice(content.span!.start, content.span!.end), `"${content.classes}"`, 'span is the nested literal, quote-inclusive, byte-identical to the source');
+  // <DialogOverlay /> (the first child, self-closing, no className passed at this usage site) is
+  // correctly passed over — the descent doesn't stop there, nor does it ever reach into it (it has
+  // no attributes at all) before finding <DialogPrimitive.Content>'s real className.
 });
 
 test('escaped quotes in a literal refuse rather than decode', () => {
@@ -138,16 +143,92 @@ test('a direct string literal with no cn() wrapper is editable, with no dynamicT
   assert.equal(foo.dynamicTail, undefined);
 });
 
-test('no className attribute at all on the root element is read-only, honestly', () => {
+test('no className attribute anywhere in the return is read-only, honestly (descends past a childless wrapper too)', () => {
   const source = [
     'function Foo({ children }: { children?: unknown }) {',
-    '  return <div>{children}</div>',
+    '  return <div><span>{children}</span></div>',
     '}',
     'export { Foo }',
   ].join('\n');
   const foo = byName(parseParts(source), 'Foo');
   assert.equal(foo.classes, undefined);
-  assert.equal(foo.readOnlyReason, 'root element has no static className');
+  assert.equal(foo.readOnlyReason, 'no static className found');
+});
+
+test('a wrapper element with no className is skipped and the descent finds the FIRST child that does have one', () => {
+  const source = [
+    'function Foo() {',
+    '  return (',
+    '    <Wrapper>',
+    '      <First />',
+    '      <Second className="block text-sm" />',
+    '      <Third className="ignored because Second already won" />',
+    '    </Wrapper>',
+    '  )',
+    '}',
+    'export { Foo }',
+  ].join('\n');
+  const foo = byName(parseParts(source), 'Foo');
+  assert.equal(foo.classes, 'block text-sm');
+  assert.equal(foo.dynamicTail, undefined);
+});
+
+test('a className that fails to resolve (dynamic) is skipped in favor of a LATER element that does resolve', () => {
+  const source = [
+    'const helper = "x"',
+    'function Foo() {',
+    '  return (',
+    '    <Outer className={helper}>',
+    '      <Inner className="block text-sm" />',
+    '    </Outer>',
+    '  )',
+    '}',
+    'export { Foo }',
+  ].join('\n');
+  const foo = byName(parseParts(source), 'Foo');
+  assert.equal(foo.classes, 'block text-sm', 'Outer\'s unresolvable className must not win over Inner\'s real literal');
+  assert.equal(foo.readOnlyReason, undefined);
+});
+
+test('when NOTHING in the return resolves, the EARLIEST non-qualifying reason wins (document order)', () => {
+  const source = [
+    'const helper = "x"',
+    'function Foo() {',
+    '  return (',
+    '    <Outer className={helper}>',
+    '      <Inner className={cn(`a ${helper}`)} />',
+    '    </Outer>',
+    '  )',
+    '}',
+    'export { Foo }',
+  ].join('\n');
+  const foo = byName(parseParts(source), 'Foo');
+  assert.equal(foo.classes, undefined);
+  assert.equal(foo.readOnlyReason, 'dynamic classes only', 'Outer\'s failure (earlier in document order) wins over Inner\'s');
+});
+
+test('the walk is bounded to one subcomponent\'s own return: a literal in the SECOND subcomponent is never attributed to the FIRST', () => {
+  const source = [
+    'function Foo({ children }: { children?: unknown }) {',
+    '  return <div><span>{children}</span></div>', // no className anywhere in Foo's whole return
+    '}',
+    'function Bar() {',
+    '  return <div className="block text-sm" />',
+    '}',
+    'export { Foo, Bar }',
+  ].join('\n');
+  const parts = parseParts(source);
+  assert.equal(parts.length, 2);
+
+  const foo = byName(parts, 'Foo');
+  assert.equal(foo.classes, undefined, "Foo must not pick up Bar's literal");
+  assert.equal(foo.readOnlyReason, 'no static className found');
+
+  const bar = byName(parts, 'Bar');
+  assert.equal(bar.classes, 'block text-sm');
+  assert.ok(bar.span);
+  // Bar's span points into Bar's own text, well past where Foo's declaration/return live.
+  assert.ok(bar.span!.start > source.indexOf('function Bar'));
 });
 
 test('splice is byte-identical outside the span, CRLF preserved', () => {
