@@ -1,6 +1,6 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, statSync, realpathSync, mkdtempSync, rmSync } from 'node:fs';
-import { basename, join, resolve, relative, extname } from 'node:path';
+import { createServer } from 'node:http';
+import { readFileSync, realpathSync, mkdtempSync, rmSync } from 'node:fs';
+import { basename, join, resolve, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { validateSystem } from './system.ts';
 import { HttpError, requireValue, record, identifier, validateMeta, contained, sourcePath, loadSource, installFiles, type Write } from './design-files.ts';
@@ -9,46 +9,10 @@ import { compareSpecs } from './components/index.ts';
 import { comparePatterns } from './patterns/index.ts';
 import { getCanonPackage } from './distribution.ts';
 import { referenceWrites } from './install.ts';
-import { findProject } from './project.ts';
+import { findProject, type Project } from './project.ts';
 import type { System, SystemMeta, Tokens, ComponentSpec, Pattern } from './types.ts';
-
-const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.md': 'text/markdown; charset=utf-8', '.tsx': 'text/plain; charset=utf-8', '.svg': 'image/svg+xml' };
-const MAX_BODY_BYTES = 8 * 1024 * 1024;
-
-function checkRequest(req: IncomingMessage) {
-  const port = req.socket.localPort;
-  const hosts = ['localhost', '127.0.0.1', '[::1]'].map((hostname) => `${hostname}:${port}`);
-  if (port === 80) hosts.push('localhost', '127.0.0.1', '[::1]');
-  const host = req.headers.host?.toLowerCase();
-  const hostCount = req.rawHeaders.filter((_, index) => index % 2 === 0 && req.rawHeaders[index].toLowerCase() === 'host').length;
-  if (!host || hostCount !== 1 || !hosts.includes(host)) throw new HttpError(403, 'Host must address this local Studio server');
-  if (req.headers.origin !== undefined && req.headers.origin !== `http://${host}`) throw new HttpError(403, 'Origin must match this Studio server');
-}
-
-function readBody(req: IncomingMessage): Promise<unknown> {
-  if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers['content-type'] ?? '')) throw new HttpError(415, 'Save requires application/json');
-  if (Number(req.headers['content-length'] ?? 0) > MAX_BODY_BYTES) throw new HttpError(413, 'Save body exceeds 8 MiB');
-  return new Promise((resolveBody, reject) => {
-    let chunks: Buffer[] = [];
-    let size = 0;
-    let done = false;
-    const fail = (error: Error) => { if (!done) { done = true; chunks = []; reject(error); } };
-    req.on('error', fail);
-    req.on('aborted', () => fail(new HttpError(400, 'Save request was interrupted')));
-    req.on('data', (chunk: Buffer) => {
-      if (done) return;
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) { fail(new HttpError(413, 'Save body exceeds 8 MiB')); return; }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (done) return;
-      done = true;
-      try { resolveBody(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-      catch { reject(new HttpError(400, 'Save body is not valid JSON')); }
-    });
-  });
-}
+import { checkRequest, decodePath, json, listen, readBody, reportError, serveStatic } from './serve-shared.ts';
+import { libHandler } from './serve-lib.ts';
 
 interface SaveBody { meta?: SystemMeta; tokens?: Tokens; components?: Record<string, ComponentSpec>; patterns?: Record<string, Pattern> }
 
@@ -116,32 +80,35 @@ async function saveSource(body: SaveBody, designRoot: string, outputRoot: string
   } finally { rmSync(stage, { recursive: true, force: true }); }
 }
 
-function json(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-  res.end(JSON.stringify(body));
-}
-
 export function serve(dir: string, port = 4600, designDir?: string, opts: { projectRoot?: string; open?: boolean } = {}): Promise<void> {
   return new Promise((resolveServe, reject) => {
     const outputRoot = realpathSync(resolve(dir));
     const designRoot = designDir ? realpathSync(resolve(designDir)) : undefined;
     const projectRoot = opts.projectRoot ? realpathSync(resolve(opts.projectRoot)) : undefined;
-    const checkProject = () => {
-      if (!projectRoot) return;
+    const checkProject = (): Project | undefined => {
+      if (!projectRoot) return undefined;
       const project = findProject(projectRoot);
       requireValue(project?.root === projectRoot && project.design === designRoot, 'This project no longer points to this Studio design; reopen its Studio');
+      return project;
     };
-    checkProject();
+    const project = checkProject();
+    // Adapter-mode project (`canon adopt` / `canon init --lib`): the target repo owns its own
+    // component library, so an entirely different request handler serves theme/inventory state
+    // and the library-studio editor instead of Canon's native design/preview. Delegated in full —
+    // native routes below (`/api/system`, `/api/save`, the design dist static files, …) never run.
+    if (project?.adapter && projectRoot) {
+      const handler = libHandler(projectRoot, project.adapter);
+      const server = createServer(async (req, res) => { await handler(req, res); });
+      listen(server, port, (p) => `canon studio → http://127.0.0.1:${p}/  (library mode: ${project.adapter} adapter, ${projectRoot})`, opts).then(resolveServe, reject);
+      return;
+    }
     if (designRoot) { contained(designRoot, outputRoot); requireValue(designRoot !== outputRoot, 'Studio output must be a separate directory within the design directory'); }
     let saving = false;
     const server = createServer(async (req, res) => {
       res.setHeader('x-content-type-options', 'nosniff');
       try {
         checkRequest(req);
-        let url: string;
-        try { url = decodeURIComponent((req.url ?? '/').split('?')[0]); }
-        catch { throw new HttpError(400, 'Malformed request URL'); }
-        requireValue(url.startsWith('/') && !url.startsWith('//') && !url.includes('\0') && !url.includes('\\'), 'Malformed request URL');
+        const url = decodePath(req);
         if (url === '/api/project') {
           if (req.method !== 'GET') throw new HttpError(405, 'Use GET for /api/project');
           checkProject();
@@ -181,36 +148,9 @@ export function serve(dir: string, port = 4600, designDir?: string, opts: { proj
           res.end(req.method === 'HEAD' ? undefined : content);
           return;
         }
-        let file = resolve(outputRoot, url === '/' ? 'preview.html' : `.${url}`);
-        contained(outputRoot, file);
-        file = realpathSync(file);
-        contained(outputRoot, file);
-        if (statSync(file).isDirectory()) { file = realpathSync(join(file, 'index.html')); contained(outputRoot, file); }
-        if (!statSync(file).isFile()) throw new HttpError(404, 'File not found');
-        const content = readFileSync(file);
-        res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
-        res.end(req.method === 'HEAD' ? undefined : content);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        const status = error instanceof HttpError ? error.status : code === 'ENOENT' || code === 'ENOTDIR' ? 404 : code === 'EACCES' || code === 'EPERM' ? 403 : 500;
-        if (!req.complete) { res.setHeader('connection', 'close'); req.resume(); }
-        if (!res.destroyed) json(res, status, { ok: false, error: error instanceof Error ? error.message : 'Studio request failed' });
-      }
+        serveStatic(outputRoot, url, req, res, 'preview.html');
+      } catch (error) { reportError(req, res, error); }
     });
-    server.requestTimeout = 30_000;
-    server.headersTimeout = 10_000;
-    const stop = () => server.close();
-    const cleanup = () => process.off('SIGINT', stop);
-    server.once('error', (error) => { cleanup(); reject(error); });
-    server.once('close', () => { cleanup(); resolveServe(); });
-    process.once('SIGINT', stop);
-    server.listen(port, '127.0.0.1', () => {
-      const address = server.address() as { port: number };
-      console.log(`canon studio → http://127.0.0.1:${address.port}/  (serving ${dir}${designDir ? ', saving to ' + designDir : ''})`);
-      if (opts.open) {
-        import('./open.ts').then(({ openBrowser }) => openBrowser(`http://127.0.0.1:${address.port}/`))
-          .catch(error => console.error(`Studio is ready; could not open a browser: ${error.message}`));
-      }
-    });
+    listen(server, port, (p) => `canon studio → http://127.0.0.1:${p}/  (serving ${dir}${designDir ? ', saving to ' + designDir : ''})`, opts).then(resolveServe, reject);
   });
 }

@@ -67,6 +67,7 @@ Usage
   canon presets                            List presets
   canon studio [--root .] [--port 4600] [--open]
                                            Edit this project's design and save its styles and agent references
+                                           (adopted/--lib projects: edit the repo's own theme and component variants instead)
   canon serve                              Alias for studio
   canon doctor                             Sanity-check a design dir
 

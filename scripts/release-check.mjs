@@ -21,7 +21,7 @@ try {
     assert.ok(files.includes(name), `Missing published file: ${name}`);
   }
   for (const name of files) {
-    assert.ok(/^(?:bin\/|lib\/|package\.json$|README\.md$|LICENSE$|THIRD_PARTY_NOTICES\.md$)/.test(name), `Unexpected published file: ${name}`);
+    assert.ok(/^(?:bin\/|lib\/|assets\/|package\.json$|README\.md$|LICENSE$|THIRD_PARTY_NOTICES\.md$)/.test(name), `Unexpected published file: ${name}`);
   }
   const version = spawnSync(process.execPath, ['bin/canon.js', '--version'], { cwd: root, encoding: 'utf8' });
   assert.equal(version.status, 0, version.stderr);

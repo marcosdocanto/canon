@@ -46,6 +46,7 @@
   "files": [
     "bin",
     "lib",
+    "assets",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
