@@ -104,3 +104,35 @@ test('a variant key unsafe for unescaped JSX interpolation makes the component r
   assert.match(exotic.readOnlyReason!, /unsafe variant key/);
   assert.match(exotic.readOnlyReason!, /has"quote/);
 });
+
+test('a digit-leading variant value like "2xl" is safe and does not force read-only', (t) => {
+  // Round 2 fix: a value key only ever lands inside the JSX attribute's quotes (`="${value}"`), so
+  // a leading digit is harmless there — unlike an axis name, which becomes the bare attribute name
+  // itself. shadcn/Tailwind scales commonly use digit-leading values like `2xl`/`3xl`; the original
+  // single SAFE_VARIANT_KEY grammar wrongly rejected them and forced the component read-only.
+  const root = clone(t);
+  writeFileSync(join(root, 'src/ui/scale.tsx'), [
+    'import { cva } from "class-variance-authority"',
+    '',
+    'const scaleVariants = cva("base-class", {',
+    '  variants: {',
+    '    size: {',
+    '      sm: "text-sm",',
+    '      "2xl": "text-2xl",',
+    '    },',
+    '  },',
+    '})',
+    '',
+    'export function Scale() {',
+    '  return null',
+    '}',
+    '',
+    'export { Scale, scaleVariants }',
+    '',
+  ].join('\n'));
+
+  const scale = inventory(root).find((i) => i.slug === 'scale')!;
+  assert.equal(scale.readOnlyReason, undefined);
+  assert.ok(scale.cva, 'a digit-leading value must not disqualify the component');
+  assert.deepEqual(Object.keys(scale.cva!.variants.size), ['sm', '2xl']);
+});

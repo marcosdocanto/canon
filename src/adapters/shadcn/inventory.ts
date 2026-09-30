@@ -14,22 +14,31 @@ const DECL_EXPORT = /export\s+(?:function\*?|class|const|let|var)\s+([A-Za-z_$][
 const PASCAL = /^[A-Z][a-z0-9$]*(?:[A-Z][a-z0-9$]*)*$/;
 // cva() keys may be quoted string literals with arbitrary characters (see cva.ts's parseKey), but
 // every variant axis name and value key ends up interpolated unescaped into a JSX attribute by
-// the render path (shadcn/render.ts's attrString: `${name}="${value}"`). A key outside this safe
-// grammar would produce syntactically invalid — or worse, injected — TSX, so it disqualifies the
-// component's cva from being exposed at all (see unsafeVariantKey below).
-const SAFE_VARIANT_KEY = /^[A-Za-z][A-Za-z0-9_-]*$/;
+// the render path (shadcn/render.ts's attrString: `${name}="${value}"`). A key outside the safe
+// grammar for its position would produce syntactically invalid — or worse, injected — TSX, so it
+// disqualifies the component's cva from being exposed at all (see unsafeVariantKey below). The
+// grammar is split by position: an axis name becomes a bare JSX attribute name (so it must start
+// with a letter, same as any JSX/HTML attribute), while an option value only ever lands inside the
+// attribute's quotes (`="${value}"`), so a leading digit is harmless there — and shadcn/Tailwind
+// scales commonly use digit-leading values like `2xl`/`3xl`, which must not be flagged unsafe.
+const SAFE_VARIANT_NAME = /^[A-Za-z][A-Za-z0-9_-]*$/;
+const SAFE_VARIANT_VALUE = /^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/;
 
 /**
  * First variant axis name or value key in `spec` that isn't safe to interpolate unescaped into a
  * JSX attribute (`name="value"`), or undefined when every key is safe. cva's grammar allows
  * quoted keys with arbitrary characters, so a legal-but-exotic source (e.g. a variant option named
  * `'has"quote'`) must never reach the render path.
+ *
+ * Only `spec.variants` is checked: `renderSpec` (shadcn/render.ts) only ever reads `variants` when
+ * building JSX attributes. If it's ever extended to also honor `defaultVariants` or
+ * `compoundVariants` in rendered output, validation here must be extended to those fields too.
  */
 function unsafeVariantKey(spec: CvaSpec): string | undefined {
   for (const [axisName, options] of Object.entries(spec.variants)) {
-    if (!SAFE_VARIANT_KEY.test(axisName)) return axisName;
+    if (!SAFE_VARIANT_NAME.test(axisName)) return axisName;
     for (const value of Object.keys(options)) {
-      if (!SAFE_VARIANT_KEY.test(value)) return value;
+      if (!SAFE_VARIANT_VALUE.test(value)) return value;
     }
   }
   return undefined;

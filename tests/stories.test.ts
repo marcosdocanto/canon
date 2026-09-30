@@ -95,6 +95,43 @@ test('a component with an unsafe variant key is read-only in its story and never
   assert.equal(buttonTagCount, 10);
 });
 
+test('a digit-leading variant value like "2xl" is safe: not read-only, renders size="2xl"', (t) => {
+  const root = clone(t);
+  writeFileSync(join(root, 'src', 'ui', 'scale.tsx'), [
+    'import { cva } from "class-variance-authority"',
+    '',
+    'const scaleVariants = cva("base-class", {',
+    '  variants: {',
+    '    size: {',
+    '      sm: "text-sm",',
+    '      "2xl": "text-2xl",',
+    '    },',
+    '  },',
+    '})',
+    '',
+    'export function Scale() {',
+    '  return null',
+    '}',
+    '',
+    'export { Scale, scaleVariants }',
+    '',
+  ].join('\n'));
+
+  const components = inventory(root);
+  const scale = components.find((c) => c.slug === 'scale')!;
+  assert.equal(scale.readOnlyReason, undefined);
+  assert.ok(scale.cva, 'a digit-leading value must not disqualify the component');
+
+  const writes = storyWrites(root, shadcnAdapter, components);
+  const scaleWrite = writes.find((w) => w.path === join(root, 'stories', 'canon', 'scale.stories.tsx'))!;
+  const content = scaleWrite.content.toString('utf8');
+  assert.ok(content.startsWith(GENERATED_MARK));
+  assert.ok(!content.includes('Style block is read-only for Canon:'), 'not treated as read-only');
+  assert.match(content, /<Scale size="2xl">/);
+  const tagCount = (content.match(/<Scale[ >]/g) ?? []).length;
+  assert.equal(tagCount, 2, 'one element per variant value (sm, 2xl)');
+});
+
 test('never clobbers unmarked story', (t) => {
   const root = clone(t);
   const components = inventory(root);
