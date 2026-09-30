@@ -1,0 +1,20 @@
+@import "tailwindcss";
+/* team notes: do not touch the keyframes below */
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --border: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.625rem;
+}
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --ring: oklch(0.556 0 0);
+}
+@keyframes spin-slow { to { transform: rotate(360deg); } }

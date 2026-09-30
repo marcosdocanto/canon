@@ -44,6 +44,16 @@ In a bound Studio, **Save** atomically updates the design source, generated CSS 
 
 Screen layout, routes and application behavior remain agent work; Save does not rewrite or deploy the app. For design-source edits made outside Studio, run `canon sync`.
 
+## Library studio
+
+To use Canon styling with an existing component library, run `canon init <name> --lib shadcn [--preset <preset>]` or `canon adopt` to adopt an existing library. Canon applies its styling on top of your components; in library mode, `canon studio` opens the library editor instead.
+
+The library editor has two tabs: **Theme** to define CSS variables with light and dark mode support, previewed against your repo's real component classes, and **Components** to edit CVA variant definitions for Canon-owned components (add or remove values, set defaults, adjust class lists); read-only components show why they cannot be edited.
+
+Below a component's variants, a **Parts** section lists its exported subcomponents (e.g. Dialog's `DialogContent`, `DialogTitle`, `DialogTrigger`) — the pieces of a component that style themselves with a plain `className` string instead of a `cva()`. A part with a static class literal is editable with the same chip editor as variants (autocomplete, add/remove, unknown-class warnings); any dynamic portion of its className (a `cn(...)` call's other arguments) shows read-only alongside the chips, and a part rendered from more than one branch of its component notes which branch is being edited. A part with no static literal to find — an aliased primitive, or one built entirely from dynamic classes — shows its name and the reason, with nothing to edit.
+
+Canon saves transactionally—theme files, CVA blocks and part class literals are rewritten in place with content outside Canon ownership unchanged, making concurrent application edits safe. A component file changed during editing triggers a 409 conflict and reload; reapply changes and save to continue. Canon owns CSS only (tokens, CVA, and now a part's own static className literal); application logic, markup and behavior remain yours. Use `canon lint` to check style violations, `canon check` to verify the build, or `canon storybook` to review components during editing.
+
 ## Contribute
 
 Contributions to components, accessibility, performance, Studio, agent integrations and documentation are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), [component authoring](docs/AUTHORING.md) or [pattern authoring](docs/PATTERNS.md). Use an issue to report a reproducible problem or discuss a larger change, then open a focused pull request.
