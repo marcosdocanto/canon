@@ -6,6 +6,27 @@ import { readConfig } from './config.ts';
 
 interface CssBlock { selector: string; body: string; bodyStart: number; bodyEnd: number; }
 
+// CSS-injection guard for `writeTheme`, which splices `theme.vars` values raw into the theme file
+// with no further escaping (unlike `preview-lib.ts`'s HTML-context rendering, which HTML-escapes
+// everything). A var name becomes `--<name>` in the custom-property declaration, so it must be a
+// bare identifier-ish token; a value lands between `: ` and `;`, so any of `;`, `{`, `}` or a
+// newline would let it close the declaration (or the enclosing `:root`/`.dark` block) early and
+// splice attacker-controlled CSS in after it — e.g. a var named `primary;}body{background:red` or
+// a value of `red;}body{background:red`.
+const SAFE_THEME_VAR_NAME = /^[A-Za-z0-9-]+$/;
+const UNSAFE_THEME_VALUE_CHARS = /[;{}\r\n]/;
+
+/** Throw naming the offending var/value if any entry in `vars` isn't safe to splice raw into CSS. */
+function validateThemeVars(vars: LibraryTheme['vars']): void {
+  for (const [name, value] of Object.entries(vars)) {
+    if (!SAFE_THEME_VAR_NAME.test(name)) throw new Error(`shadcn adapter: theme var name is not safe to write: ${JSON.stringify(name)}`);
+    for (const side of ['light', 'dark'] as const) {
+      const v = value[side];
+      if (v !== undefined && UNSAFE_THEME_VALUE_CHARS.test(v)) throw new Error(`shadcn adapter: theme var "${name}" ${side} value contains a disallowed character (; { } or a newline): ${JSON.stringify(v)}`);
+    }
+  }
+}
+
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
 }
@@ -171,8 +192,13 @@ function blockIndent(body: string): string {
  * `:root`, dark values into `.dark`). Everything else — comments, imports, other rules, unmanaged
  * vars — is preserved byte-for-byte: the file is re-scanned with the same block scanner used by
  * `readTheme`, and the new content is built by splicing spans, never by re-serializing.
+ *
+ * Every var name and value is validated first (`validateThemeVars`) — they're spliced raw into
+ * CSS text with no escaping, so a name or value outside the safe grammar could otherwise close the
+ * declaration (or its enclosing block) early and inject attacker-controlled CSS.
  */
 export function writeTheme(root: string, theme: LibraryTheme): Write[] {
+  validateThemeVars(theme.vars);
   const { file } = theme;
   if (!existsSync(file)) throw new Error(`shadcn adapter: css file not found: ${file}`);
   const css = readFileSync(file, 'utf8');

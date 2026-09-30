@@ -41,6 +41,10 @@ function themeTable(semantic: Tokens['color']['semantic'], theme: LibraryTheme, 
   return table(['variable', 'light', 'dark', 'canon semantic', 'description'], rows);
 }
 
+// Interpolates axis names/values straight into a markdown table cell; a hostile key (e.g. one
+// holding `|` or a newline) could otherwise corrupt this table. Not re-guarded here: the write path
+// (src/adapters/shadcn/inventory.ts's `writeVariants` / `validateSpec`) already refuses to persist
+// an unsafe axis name or value key before a `CvaSpec` ever reaches this generator.
 function variantSummary(c: ComponentInfo): string {
   if (!c.cva) return '—';
   const axes = Object.entries(c.cva.variants).map(([axis, values]) => `${axis}: ${Object.keys(values).join('/')}`);

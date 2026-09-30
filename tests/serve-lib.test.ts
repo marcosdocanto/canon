@@ -331,14 +331,13 @@ test('POST /api/lib/save requires a hash for every file it is about to touch (mi
   assert.equal(readFileSync(buttonFile, 'utf8'), buttonBefore, 'button.tsx must be untouched');
 });
 
-// Task 4 (not yet implemented): `writeTheme` splices a theme var's NAME (for a var not already
-// present in the CSS block) and VALUE into the theme file with no injection guard — a name like
-// `primary;}body{background:red` would close the custom-property declaration and the `:root` block
-// early, then open an attacker-controlled rule. `draftTheme`'s own docstring already flags this as
-// out of scope for shape validation ("not the CSS-injection guard ... that belongs to the write
-// path, Task 4"). This test pins the DESIRED outcome (400/422, zero writes) for when Task 4 adds
-// that guard to `writeTheme`; skipped for now so the suite stays green.
-test('POST /api/lib/save rejects a CSS-injecting theme var name', { skip: 'Task 4: writeTheme has no var name/value injection guard yet (see comment above)' }, async (t) => {
+// `writeTheme` splices a theme var's NAME (for a var not already present in the CSS block) and
+// VALUE into the theme file. A name like `primary;}body{background:red` would close the
+// custom-property declaration and the `:root` block early, then open an attacker-controlled rule.
+// `draftTheme`'s own docstring already flags this as out of scope for shape validation ("not the
+// CSS-injection guard ... that belongs to the write path, Task 4") — Task 4 adds that guard to
+// `writeTheme` (`validateThemeVars`) and wires its throw to a 422 here.
+test('POST /api/lib/save rejects a CSS-injecting theme var name', async (t) => {
   const f = await libFixture(t);
   const state = (await f.request('/api/lib/state')).json();
   const hostileName = 'primary;}body{background:red';
@@ -352,6 +351,90 @@ test('POST /api/lib/save rejects a CSS-injecting theme var name', { skip: 'Task 
   assert.ok(res.status === 400 || res.status === 422, `expected 400/422 rejecting the hostile var name, got ${res.status}`);
   const css = readFileSync(join(f.root, 'app', 'globals.css'), 'utf8');
   assert.ok(!css.includes('body{background:red'), 'hostile CSS must never be spliced into the theme file');
+});
+
+test('POST /api/lib/save rejects a CSS-injecting theme var value (`;}`), naming the theme field, writing nothing', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const cssBefore = readFileSync(join(f.root, 'app', 'globals.css'), 'utf8');
+  const draft = { ...state.theme, vars: { ...state.theme.vars, primary: { light: 'red;}body{background:red' } } };
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ theme: draft, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 422);
+  assert.equal(res.json().field, 'theme');
+  assert.equal(readFileSync(join(f.root, 'app', 'globals.css'), 'utf8'), cssBefore, 'hostile CSS must never be spliced into the theme file');
+});
+
+test('POST /api/lib/save rejects a hostile class string with quotes on a component, naming the slug, writing nothing', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const button = state.components.find((c: any) => c.slug === 'button');
+  const buttonFile = join(f.root, 'src', 'ui', 'button.tsx');
+  const buttonBefore = readFileSync(buttonFile, 'utf8');
+  const draftButton = JSON.parse(JSON.stringify(button.cva));
+  draftButton.variants.size.sm = ['h-8" onClick={alert(1)} x="'];
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ components: { button: draftButton }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 422);
+  assert.equal(res.json().slug, 'button');
+  assert.equal(readFileSync(buttonFile, 'utf8'), buttonBefore, 'button.tsx must be untouched');
+});
+
+test('POST /api/lib/save rejects a hostile variant axis value (JSX attribute breakout via `"`), naming the slug, writing nothing', async (t) => {
+  // CRITICAL from Task 3's review: `unsafeVariantKey` existed but `writeVariants` never called it —
+  // a crafted axis value like this one would reach a generated `.stories.tsx` file as executable
+  // JSX (shadcn/render.ts's `attrString` interpolates the value unescaped into `name="value"`).
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const button = state.components.find((c: any) => c.slug === 'button');
+  const buttonFile = join(f.root, 'src', 'ui', 'button.tsx');
+  const buttonBefore = readFileSync(buttonFile, 'utf8');
+  const draftButton = JSON.parse(JSON.stringify(button.cva));
+  draftButton.variants.size['sm" onClick={alert(1)} x="'] = ['h-8'];
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ components: { button: draftButton }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 422);
+  assert.equal(res.json().slug, 'button');
+  assert.equal(readFileSync(buttonFile, 'utf8'), buttonBefore, 'button.tsx must be untouched');
+});
+
+test('POST /api/lib/save rejects an unknown path in hashes (not the theme file or an inventoried cva component), 400, no hang', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const bogusPath = join(f.root, 'definitely-not-a-tracked-file.css');
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hashes: { ...state.hashes, [bogusPath]: 'deadbeef' } }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test('POST /api/lib/save rejects a read-only component file (badge) listed in hashes, even with its real hash', async (t) => {
+  // `stateHashes` never hands out a hash for a read-only component (see the state test above), so
+  // that path is never a legitimate key of `hashes` — the same "known files" allowlist that blocks
+  // an arbitrary path also blocks naming a real-but-unhashed repo file this way.
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const badgeFile = join(f.root, 'src', 'ui', 'badge.tsx');
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hashes: { ...state.hashes, [badgeFile]: createHash('sha256').update(readFileSync(badgeFile)).digest('hex') } }),
+  });
+  assert.equal(res.status, 400);
 });
 
 test('GET / serves the bundled library-studio editor shell', async (t) => {

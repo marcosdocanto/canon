@@ -1,6 +1,7 @@
 // shadcn/ui inventory: enumerate ui components, parse their cva() specs, and splice writes back.
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { Write } from '../../design-files.ts';
 import type { ComponentInfo, CvaSpec } from '../types.ts';
 import { readConfig } from './config.ts';
@@ -42,6 +43,49 @@ function unsafeVariantKey(spec: CvaSpec): string | undefined {
     }
   }
   return undefined;
+}
+
+// A class-list entry `writeVariants` is about to splice into `cva()`'s printed string literals
+// (`printClassValue` in cva.ts) must be plain space-separated tokens: no quotes, backtick, braces
+// or backslash. `printClassValue` always round-trips a value through `JSON.stringify`, which
+// escapes `"`/`\` correctly on its own, so this guard isn't about producing invalid TSX — it's
+// about refusing a hostile or malformed value (e.g. one holding a `}` meant to close the object
+// literal, or a backtick aimed at a template-literal context elsewhere) before it ever reaches
+// disk. The round-trip check at the end of `writeVariants` is the final backstop if this regex
+// were ever wrong about what's actually safe.
+const SAFE_CLASS_LIST = /^[^\s"'`{}\\]+(?: [^\s"'`{}\\]+)*$/;
+
+function validateClassList(classes: string[], where: string): void {
+  for (const cls of classes) {
+    if (!SAFE_CLASS_LIST.test(cls)) throw new Error(`shadcn adapter: ${where} has an unsafe class string: ${JSON.stringify(cls)}`);
+  }
+}
+
+/**
+ * Full pre-splice validation of a `CvaSpec` about to be written to disk by `writeVariants`: every
+ * class string in `base`, each variant's classes, and each `compoundVariants` entry's classes must
+ * be a safe token list (`SAFE_CLASS_LIST`); every variant axis name and value key must be safe to
+ * interpolate unescaped into a rendered/story JSX attribute (`renderSpec`, shadcn/render.ts) — the
+ * same grammar `inventory()` already applies when READING a cva() back (`unsafeVariantKey`), now
+ * also enforced on write: without this, a hostile axis value such as `sm" onClick={...} x="` would
+ * happily parse and splice, then reach a generated `.stories.tsx` file as executable JSX. Finally,
+ * `defaultVariants`' own keys and string values are held to the same two grammars defensively, even
+ * though nothing renders them unescaped today (see `unsafeVariantKey`'s docstring on that scope).
+ */
+function validateSpec(spec: CvaSpec, slug: string): void {
+  validateClassList(spec.base, `"${slug}" base`);
+  for (const [axis, options] of Object.entries(spec.variants)) {
+    for (const [value, classes] of Object.entries(options)) validateClassList(classes, `"${slug}" variants.${axis}.${value}`);
+  }
+  spec.compoundVariants.forEach(({ classes }, index) => validateClassList(classes, `"${slug}" compoundVariants[${index}]`));
+
+  const unsafeKey = unsafeVariantKey(spec);
+  if (unsafeKey !== undefined) throw new Error(`shadcn adapter: "${slug}" has an unsafe variant key: ${JSON.stringify(unsafeKey)}`);
+
+  for (const [key, value] of Object.entries(spec.defaultVariants)) {
+    if (!SAFE_VARIANT_NAME.test(key)) throw new Error(`shadcn adapter: "${slug}" has an unsafe defaultVariants key: ${JSON.stringify(key)}`);
+    if (typeof value === 'string' && !SAFE_VARIANT_VALUE.test(value)) throw new Error(`shadcn adapter: "${slug}" has an unsafe defaultVariants value: ${JSON.stringify(value)}`);
+  }
 }
 
 /** Find the first PascalCase named export in `source` — `export { Foo, bar }` or `export function Foo` — in source order. */
@@ -127,12 +171,21 @@ export function inventory(root: string): ComponentInfo[] {
 }
 
 /**
- * Splice an updated `CvaSpec` back into a component's source file. Re-reads the file and re-locates
- * the `cva()` call fresh — its span may have moved since `inventory` ran — and refuses, naming the
- * component, if the call has disappeared or no longer parses under the supported grammar (someone
- * may have hand-edited the file in the meantime).
+ * Splice an updated `CvaSpec` back into a component's source file. Validates `spec` first
+ * (`validateSpec` — safe class strings, safe variant/defaultVariants keys) and refuses, naming the
+ * offending value, before touching the file at all. Re-reads the file and re-locates the `cva()`
+ * call fresh — its span may have moved since `inventory` ran — and refuses, naming the component,
+ * if the call has disappeared or no longer parses under the supported grammar (someone may have
+ * hand-edited the file in the meantime). Finally, before returning the `Write`, re-locates and
+ * re-parses the JUST-SPLICED `cva()` call and checks it deep-equals `spec` — a `printCva` →
+ * `parseCva` fixed point, the same property `tests/shadcn-cva.test.ts` pins directly — refusing,
+ * naming the construct, if the printer and parser ever disagree on this spec (the class-string and
+ * key validation above should make that unreachable, but this is the backstop that would catch it
+ * rather than silently writing a file whose cva() reads back differently than intended).
  */
 export function writeVariants(component: ComponentInfo, spec: CvaSpec): Write {
+  validateSpec(spec, component.slug);
+
   const file = realpathSync(component.file); // never trust the caller's path to already be canonical (see connect.ts, install.ts)
   const source = readFileSync(file, 'utf8');
   const span = findCva(source); // first cva() call only, same as inventory()
@@ -144,5 +197,17 @@ export function writeVariants(component: ComponentInfo, spec: CvaSpec): Write {
     throw new Error(`shadcn adapter: "${component.slug}"'s cva() is no longer parseable: ${error.message}`);
   }
   const content = spliceCva(source, span, spec);
+
+  const roundTripSpan = findCva(content);
+  if (!roundTripSpan) throw new Error(`shadcn adapter: "${component.slug}"'s just-spliced cva() could not be re-located (round-trip check failed)`);
+  let roundTripped: CvaSpec;
+  try {
+    roundTripped = parseCva(content, roundTripSpan);
+  } catch (error) {
+    if (!(error instanceof CvaParseError)) throw error;
+    throw new Error(`shadcn adapter: "${component.slug}"'s just-spliced cva() failed to round-trip: unsupported ${error.construct}`);
+  }
+  if (!isDeepStrictEqual(roundTripped, spec)) throw new Error(`shadcn adapter: "${component.slug}"'s just-spliced cva() did not round-trip to the same spec`);
+
   return { root: findProjectRoot(dirname(file)), path: file, content: Buffer.from(content, 'utf8') };
 }

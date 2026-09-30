@@ -32,6 +32,54 @@ test('writeVariants preserves hand-added behavior code', (t) => {
   assert.ok(file.includes('export { Button, buttonVariants }'));
 });
 
+test('writeVariants rejects a class string with a quote, writing nothing', (t) => {
+  const root = clone(t);
+  const button = inventory(root).find((i) => i.slug === 'button')!;
+  const before = readFileSync(button.file, 'utf8');
+  const spec = structuredClone(button.cva!);
+  spec.variants.variant.brand = ['bg-primary" onClick={alert(1)} x="'];
+  assert.throws(() => writeVariants(button, spec), /unsafe class string/);
+  assert.equal(readFileSync(button.file, 'utf8'), before, 'a rejected writeVariants call must never touch the file');
+});
+
+test('writeVariants rejects a class string with braces or a backtick, writing nothing', (t) => {
+  const root = clone(t);
+  const button = inventory(root).find((i) => i.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.variants.variant.brand = ['bg-primary}`evil`{'];
+  assert.throws(() => writeVariants(button, spec), /unsafe class string/);
+});
+
+test('writeVariants rejects a hostile variant axis value (unescaped JSX attribute breakout), writing nothing', (t) => {
+  // Mirrors the "unsafe variant key" guard `inventory()` already applies on read (see
+  // `unsafeVariantKey` in inventory.ts) — CRITICAL from Task 3's review: `writeVariants` never
+  // called it, so a spec like this one would parse and splice fine, then reach a generated
+  // `.stories.tsx` file as executable JSX via shadcn/render.ts's `attrString`.
+  const root = clone(t);
+  const button = inventory(root).find((i) => i.slug === 'button')!;
+  const before = readFileSync(button.file, 'utf8');
+  const spec = structuredClone(button.cva!);
+  spec.variants.size['sm" onClick={alert(1)} x="'] = ['h-8'];
+  assert.throws(() => writeVariants(button, spec), /unsafe variant key/);
+  assert.equal(readFileSync(button.file, 'utf8'), before, 'a rejected writeVariants call must never touch the file');
+});
+
+test('writeVariants rejects a hostile variant axis name, writing nothing', (t) => {
+  const root = clone(t);
+  const button = inventory(root).find((i) => i.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.variants['size" onClick={alert(1)} x="'] = { sm: ['h-8'] };
+  assert.throws(() => writeVariants(button, spec), /unsafe variant key/);
+});
+
+test('writeVariants rejects an unsafe defaultVariants value, writing nothing', (t) => {
+  const root = clone(t);
+  const button = inventory(root).find((i) => i.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.defaultVariants.variant = 'default" onClick={alert(1)} x="';
+  assert.throws(() => writeVariants(button, spec), /unsafe defaultVariants value/);
+});
+
 test('adapter install shells out through the injected exec', async () => {
   const calls: any[] = [];
   await shadcnAdapter.install('/tmp/x', ['button'], async (cmd, args, opts) => {

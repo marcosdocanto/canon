@@ -49,6 +49,34 @@ test('writeTheme rewrites only managed var lines and preserves unrelated css', (
   assert.equal(readFileSync(join(root, 'app/globals.css'), 'utf8'), css);
 });
 
+test('writeTheme rejects a CSS-injecting var name, writing nothing', (t) => {
+  const root = clone(t);
+  const cssFile = join(root, 'app/globals.css');
+  const before = readFileSync(cssFile, 'utf8');
+  const theme = readTheme(root);
+  const hostileName = 'primary;}body{background:red';
+  theme.vars[hostileName] = { light: 'red' };
+  assert.throws(() => writeTheme(root, theme), /theme var name is not safe to write/);
+  assert.equal(readFileSync(cssFile, 'utf8'), before, 'a rejected writeTheme call must never touch the file');
+});
+
+test('writeTheme rejects a var value containing `;` `{` or `}`, writing nothing', (t) => {
+  const root = clone(t);
+  const cssFile = join(root, 'app/globals.css');
+  const before = readFileSync(cssFile, 'utf8');
+  const theme = readTheme(root);
+  theme.vars.primary = { light: 'red;}body{background:red' };
+  assert.throws(() => writeTheme(root, theme), /disallowed character/);
+  assert.equal(readFileSync(cssFile, 'utf8'), before, 'a rejected writeTheme call must never touch the file');
+});
+
+test('writeTheme rejects a var value containing a newline, writing nothing', (t) => {
+  const root = clone(t);
+  const theme = readTheme(root);
+  theme.vars.primary = { light: 'red', dark: 'blue\n} .evil { color: red' };
+  assert.throws(() => writeTheme(root, theme), /disallowed character/);
+});
+
 test('systemToTheme maps canon semantics onto shadcn vars', async (t) => {
   const system = await createSystem({ name: 'Map fixture', prefix: 'mx', brand: '#7c3aed' });
   const mapped = systemToTheme(system, readTheme(clone(t)));

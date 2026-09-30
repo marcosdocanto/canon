@@ -142,7 +142,11 @@ function saveBody(value: unknown): SaveBody {
   let components: Record<string, CvaSpec> | undefined;
   if ('components' in body) {
     const rawComponents = record(body.components, 'components');
-    components = {};
+    // `Object.create(null)` rather than `{}`: a slug of `__proto__` assigned via `components[slug] =
+    // …` on a plain object literal hits Object.prototype's `__proto__` SETTER instead of creating an
+    // own property, silently dropping that component from the save instead of erroring or applying
+    // it — a null-prototype object has no such setter, so the assignment always lands as a real key.
+    components = Object.create(null) as Record<string, CvaSpec>;
     for (const [slug, spec] of Object.entries(rawComponents)) components[slug] = draftCvaSpec(spec, `components.${slug}`);
   }
   return { theme, components, hashes };
@@ -212,15 +216,22 @@ export function libHandler(root: string, adapterId: string, designDir: string): 
  *      against the CURRENT inventory (unknown or read-only → 422, naming the slug).
  *   2. Every file this save will touch (the theme file, when `theme` is present; each named
  *      component's file) must have a hash in the body's `hashes` — a missing one is a 400 (a client
- *      bug: saving over an unverified file defeats conflict safety). Then re-hash EVERY file listed
- *      in `hashes` (not only the touched ones — the client's whole last-known snapshot) against disk
- *      — any mismatch is a 409 naming that file, before anything is written.
- *   3. Stage `adapter.writeTheme` (theme present) and `adapter.writeVariants` per named component
- *      (an adapter throw is a 422 naming the slug, nothing written) plus the regenerated dist +
- *      stories (`buildLibWrites`, fed the in-memory next theme/components so DESIGN.md/stories
- *      describe what this save is about to commit, not stale disk).
+ *      bug: saving over an unverified file defeats conflict safety). Every KEY in `hashes` must also
+ *      be one of the files this Studio would itself hand out (the theme file or an inventoried
+ *      cva() component's file) — an unknown path is a 400 before any hash is computed, so `hashes`
+ *      can never be used to make the server `readFileSync`/hash an arbitrary path. Then re-hash
+ *      EVERY file listed in `hashes` (not only the touched ones — the client's whole last-known
+ *      snapshot) against disk — any mismatch is a 409 naming that file, before anything is written.
+ *   3. Stage `adapter.writeTheme` (theme present) and `adapter.writeVariants` per named component —
+ *      an adapter throw (shape-valid but hostile input the adapter's own guards reject, e.g. a
+ *      CSS-injecting theme var or an unsafe variant key) is a 422, nothing written — plus the
+ *      regenerated dist + stories (`buildLibWrites`, fed the in-memory next theme/components so
+ *      DESIGN.md/stories describe what this save is about to commit, not stale disk).
  *   4. One `installFiles` batch — atomic, rolled back whole on any failure — then respond with the
- *      same payload shape as `GET /api/lib/state`, read fresh off disk.
+ *      same payload shape as `GET /api/lib/state`, read fresh off disk. That re-read is best-effort:
+ *      the save already committed by this point, so a throw while building the response body is
+ *      reported as a 200 with `stateError` set, never a 500 (which would look like the save itself
+ *      failed and invite a client retry that re-sends writes already on disk).
  */
 async function handleSave(req: IncomingMessage, res: ServerResponse, root: string, designDir: string, adapter: Adapter): Promise<void> {
   const body = saveBody(await readBody(req));
@@ -241,6 +252,15 @@ async function handleSave(req: IncomingMessage, res: ServerResponse, root: strin
   for (const slug of Object.keys(body.components ?? {})) touched.add(infoBySlug.get(slug)!.file);
   for (const file of touched) requireValue(file in body.hashes, `Missing hash for ${file}: every file this save touches must be covered by "hashes"`);
 
+  // Every key in `hashes` must be a path this Studio would itself have handed out in `GET
+  // /api/lib/state` — the theme file or an inventoried component's own file with a cva() (see
+  // `stateHashes`). Without this check, `hashes` is an attacker-controlled map of arbitrary strings
+  // read straight into `sha256File` -> `readFileSync`: a bogus path could hang the process reading a
+  // FIFO, or leak whether some arbitrary filesystem path exists/is readable via the response's
+  // status code. A 400 here, before any hash is computed, closes that off.
+  const knownFiles = new Set<string>([currentTheme.file, ...currentComponents.filter((c) => c.cva).map((c) => c.file)]);
+  for (const file of Object.keys(body.hashes)) requireValue(knownFiles.has(file), `Unknown path in hashes: ${file}`);
+
   for (const [file, expected] of Object.entries(body.hashes)) {
     let actual: string;
     try { actual = sha256File(file); }
@@ -251,7 +271,10 @@ async function handleSave(req: IncomingMessage, res: ServerResponse, root: strin
   // Nothing above touches disk. From here, every Write is staged in memory; the single
   // `installFiles` call below is the only place any of it is actually applied.
   const writes: Write[] = [];
-  if (body.theme) writes.push(...adapter.writeTheme(root, body.theme));
+  if (body.theme) {
+    try { writes.push(...adapter.writeTheme(root, body.theme)); }
+    catch (error) { json(res, 422, { field: 'theme', message: (error as Error).message }); return; } // e.g. a var name/value the CSS-injection guard rejects
+  }
 
   const nextComponents = currentComponents.slice();
   for (const [slug, spec] of Object.entries(body.components ?? {})) {
@@ -266,5 +289,14 @@ async function handleSave(req: IncomingMessage, res: ServerResponse, root: strin
   writes.push(...await buildLibWrites(root, designDir, { theme: body.theme ?? currentTheme, components: nextComponents }));
 
   installFiles(root, writes);
-  json(res, 200, readState(root, adapter));
+  // The save already committed at this point — installFiles either applied every write or rolled
+  // all of them back, atomically. Re-reading fresh state off disk is a courtesy for the response
+  // body, not part of the transaction: if it throws (e.g. a raced external change to the theme file
+  // or a component between the commit above and this read), that must never be reported as the save
+  // itself failing (a 500 the client would reasonably retry, re-sending writes that already landed).
+  try {
+    json(res, 200, readState(root, adapter));
+  } catch (error) {
+    json(res, 200, { saved: true, stateError: (error as Error).message });
+  }
 }
