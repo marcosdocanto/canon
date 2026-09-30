@@ -12,6 +12,28 @@ const DECL_EXPORT = /export\s+(?:function\*?|class|const|let|var)\s+([A-Za-z_$][
 // capital starts a new word — this excludes SCREAMING_SNAKE_CASE and other all-caps identifiers
 // (e.g. `TOAST_LIMIT`) that would otherwise look "capitalized" but aren't a component name.
 const PASCAL = /^[A-Z][a-z0-9$]*(?:[A-Z][a-z0-9$]*)*$/;
+// cva() keys may be quoted string literals with arbitrary characters (see cva.ts's parseKey), but
+// every variant axis name and value key ends up interpolated unescaped into a JSX attribute by
+// the render path (shadcn/render.ts's attrString: `${name}="${value}"`). A key outside this safe
+// grammar would produce syntactically invalid — or worse, injected — TSX, so it disqualifies the
+// component's cva from being exposed at all (see unsafeVariantKey below).
+const SAFE_VARIANT_KEY = /^[A-Za-z][A-Za-z0-9_-]*$/;
+
+/**
+ * First variant axis name or value key in `spec` that isn't safe to interpolate unescaped into a
+ * JSX attribute (`name="value"`), or undefined when every key is safe. cva's grammar allows
+ * quoted keys with arbitrary characters, so a legal-but-exotic source (e.g. a variant option named
+ * `'has"quote'`) must never reach the render path.
+ */
+function unsafeVariantKey(spec: CvaSpec): string | undefined {
+  for (const [axisName, options] of Object.entries(spec.variants)) {
+    if (!SAFE_VARIANT_KEY.test(axisName)) return axisName;
+    for (const value of Object.keys(options)) {
+      if (!SAFE_VARIANT_KEY.test(value)) return value;
+    }
+  }
+  return undefined;
+}
 
 /** Find the first PascalCase named export in `source` — `export { Foo, bar }` or `export function Foo` — in source order. */
 function firstPascalExport(source: string): string | undefined {
@@ -46,7 +68,10 @@ function findProjectRoot(dir: string): string {
  * `importPath` built from the configured ui import alias, and — when the file has a `cva()` call —
  * its parsed `CvaSpec`. A `cva()` call outside the supported grammar doesn't drop the component
  * from the inventory: it's still listed, with `readOnlyReason` set to the parser's error message
- * and no `cva`/`cvaSpan`. A file with no `cva()` call at all also has neither field set, and no
+ * and no `cva`/`cvaSpan`. The same applies when the call parses fine but a variant axis name or
+ * value key isn't safe to interpolate into a JSX attribute unescaped (see `unsafeVariantKey`
+ * above) — `readOnlyReason` names the offending key and `cva` is withheld even though parsing
+ * succeeded. A file with no `cva()` call at all also has neither field set, and no
  * `readOnlyReason` (that's not an error — it's just a component without variants). A file with no
  * genuine PascalCase named export at all — e.g. a barrel `index.tsx` holding only
  * `export * from './button'` — isn't a component and is skipped from the inventory entirely,
@@ -76,7 +101,12 @@ export function inventory(root: string): ComponentInfo[] {
     const span = findCva(source);
     if (span) {
       info.cvaSpan = span;
-      try { info.cva = parseCva(source, span); }
+      try {
+        const spec = parseCva(source, span);
+        const unsafeKey = unsafeVariantKey(spec);
+        if (unsafeKey !== undefined) info.readOnlyReason = `unsafe variant key: ${unsafeKey}`;
+        else info.cva = spec;
+      }
       catch (error) {
         if (!(error instanceof CvaParseError)) throw error;
         info.readOnlyReason = error.message;

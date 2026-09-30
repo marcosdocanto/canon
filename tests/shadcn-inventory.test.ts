@@ -72,3 +72,35 @@ test('barrel files with no genuine PascalCase export are skipped from the invent
   assert.ok(items.find((i) => i.slug === 'button'));
   assert.ok(items.find((i) => i.slug === 'badge'));
 });
+
+test('a variant key unsafe for unescaped JSX interpolation makes the component read-only', (t) => {
+  // cva()'s grammar allows quoted keys with arbitrary characters (see cva.ts's parseKey), but the
+  // render path interpolates every variant axis name/value key unescaped into a JSX attribute
+  // (shadcn/render.ts's attrString). A key like `has"quote` would otherwise produce broken —
+  // or injected — TSX silently written to disk; inventory must refuse it and surface the
+  // component as read-only instead of exposing the parsed cva.
+  const root = clone(t);
+  writeFileSync(join(root, 'src/ui/exotic.tsx'), [
+    'import { cva } from "class-variance-authority"',
+    '',
+    'const exoticVariants = cva("base-class", {',
+    '  variants: {',
+    '    variant: {',
+    '      \'has"quote\': "foo",',
+    '    },',
+    '  },',
+    '})',
+    '',
+    'export function Exotic() {',
+    '  return null',
+    '}',
+    '',
+    'export { Exotic, exoticVariants }',
+    '',
+  ].join('\n'));
+
+  const exotic = inventory(root).find((i) => i.slug === 'exotic')!;
+  assert.equal(exotic.cva, undefined);
+  assert.match(exotic.readOnlyReason!, /unsafe variant key/);
+  assert.match(exotic.readOnlyReason!, /has"quote/);
+});

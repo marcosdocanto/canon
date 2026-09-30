@@ -48,6 +48,53 @@ test('read-only components get a single default example plus a docs note with th
   assert.ok(content.includes(badge.readOnlyReason!), 'docs note includes the actual reason');
 });
 
+test('a component with an unsafe variant key is read-only in its story and never reaches the JSX', (t) => {
+  const root = clone(t);
+  writeFileSync(join(root, 'src', 'ui', 'exotic.tsx'), [
+    'import { cva } from "class-variance-authority"',
+    '',
+    'const exoticVariants = cva("base-class", {',
+    '  variants: {',
+    '    variant: {',
+    '      \'has"quote\': "foo",',
+    '    },',
+    '  },',
+    '})',
+    '',
+    'export function Exotic() {',
+    '  return null',
+    '}',
+    '',
+    'export { Exotic, exoticVariants }',
+    '',
+  ].join('\n'));
+
+  const components = inventory(root);
+  const exotic = components.find((c) => c.slug === 'exotic')!;
+  assert.equal(exotic.cva, undefined);
+  assert.match(exotic.readOnlyReason!, /unsafe variant key: has"quote/);
+
+  const writes = storyWrites(root, shadcnAdapter, components);
+
+  const exoticWrite = writes.find((w) => w.path === join(root, 'stories', 'canon', 'exotic.stories.tsx'))!;
+  const exoticContent = exoticWrite.content.toString('utf8');
+  assert.ok(exoticContent.startsWith(GENERATED_MARK));
+
+  // The unsafe key never reaches the rendered element itself — only the (safely escaped) docs note.
+  const elementLine = exoticContent.split('\n').find((line) => line.trim().startsWith('<Exotic'));
+  assert.equal(elementLine?.trim(), '<Exotic>…</Exotic>', 'no attribute is emitted for the unsafe axis');
+  const tagCount = (exoticContent.match(/<Exotic[ >]/g) ?? []).length;
+  assert.equal(tagCount, 1, 'read-only component gets a single default example');
+  const expectedNote = JSON.stringify(`Style block is read-only for Canon: ${exotic.readOnlyReason}`);
+  assert.ok(exoticContent.includes(expectedNote), 'docs note carries the reason, safely escaped');
+
+  // The rest of the set is unaffected: button's story still has all its usual examples.
+  const buttonWrite = writes.find((w) => w.path === join(root, 'stories', 'canon', 'button.stories.tsx'))!;
+  const buttonContent = buttonWrite.content.toString('utf8');
+  const buttonTagCount = (buttonContent.match(/<Button[ >]/g) ?? []).length;
+  assert.equal(buttonTagCount, 10);
+});
+
 test('never clobbers unmarked story', (t) => {
   const root = clone(t);
   const components = inventory(root);
