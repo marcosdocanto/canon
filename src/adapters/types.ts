@@ -27,6 +27,16 @@ export interface Adapter {
   writeTheme(root: string, theme: LibraryTheme): Write[];
   inventory(root: string): ComponentInfo[];
   writeVariants(component: ComponentInfo, spec: CvaSpec): Write;
+  /**
+   * Splice an edited class string into one of `component`'s "parts" (an exported subcomponent's
+   * own static `className` literal — see `ComponentInfo.parts` / `PartInfo`), returning the file
+   * `Write` — not yet applied; pass to `installFiles`. Re-reads and re-parses the component's file
+   * fresh rather than trusting a possibly-stale `parts` array, and throws, naming `component.slug`
+   * and `partName`, when the part doesn't exist or is read-only (`PartInfo.readOnlyReason`), or
+   * when `classes` fails the adapter's safe class-token grammar (no quotes, backtick, braces or
+   * backslash) — in every failure case, nothing is written to disk.
+   */
+  writePart(component: ComponentInfo, partName: string, classes: string): Write;
   install(root: string, slugs: string[], exec: ExecFn): Promise<void>;
   /** Run the library's own project init (its first-run scaffolding command) through `exec`, for `canon init --lib` when `detect` finds nothing yet. */
   initProject(root: string, exec: ExecFn): Promise<void>;

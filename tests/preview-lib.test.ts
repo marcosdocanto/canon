@@ -5,7 +5,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { previewHtml, escapeHtml, classesFor } from '../src/generators/preview-lib.ts';
-import type { LibraryTheme, ComponentInfo, RenderExample, CvaSpec } from '../src/adapters/types.ts';
+import type { LibraryTheme, ComponentInfo, RenderExample, CvaSpec, PartInfo } from '../src/adapters/types.ts';
+import { parseParts } from '../src/adapters/shadcn/parts.ts';
+
+const DIALOG = readFileSync(new URL('./fixtures/shadcn-app/src/ui/dialog.tsx', import.meta.url), 'utf8');
+const dialogParts = parseParts(DIALOG);
+function dialogPart(name: string): PartInfo {
+  const part = dialogParts.find((p) => p.name === name);
+  assert.ok(part, `no dialog part named "${name}"`);
+  return part!;
+}
 
 const theme: LibraryTheme = {
   file: '/fake/project/app/globals.css',
@@ -152,7 +161,8 @@ test('previewHtml renders a compact muted placeholder for a cva-less component w
   const section = /<section[^>]*data-slug="accordion"[\s\S]*?<\/section>/.exec(html)?.[0];
   assert.ok(section, 'expected an accordion section');
   assert.match(section!, /<h2>Accordion<\/h2>/);
-  assert.match(section!, /no styled variants — behavior component/);
+  assert.match(section!, /no static styles found/);
+  assert.doesNotMatch(section!, /behavior component/, 'the old "behavior component" phrasing must be gone');
   assert.doesNotMatch(section!, /<figcaption>/, 'no per-example markup for a component with no cva to preview');
   assert.doesNotMatch(section!, /…/, 'the generic ellipsis filler must never leak into the placeholder');
   // The component's name appears exactly once (the heading) — never duplicated into a caption too.
@@ -237,3 +247,101 @@ test('preview-lib module reads no repo file except the vendored runtime asset (p
   assert.doesNotMatch(source, /\bimport\(/, 'must not dynamically import repo files');
   assert.doesNotMatch(source, /\breadFile\(/, 'must not async-read repo files either');
 });
+
+// ---- Part rendering (Task 2) --------------------------------------------------------------
+
+test('previewHtml renders a pure-parts component (no cva): styled parts as real elements with their classes and a caption, no placeholder', () => {
+  const dialogInfo: ComponentInfo = { slug: 'dialog', file: '/fake/project/src/ui/dialog.tsx', exportName: 'Dialog', importPath: '~/ui/dialog', parts: dialogParts };
+  const html = previewHtml(theme, [{ info: dialogInfo, examples: [] }]);
+  const section = /<section[^>]*data-slug="dialog"[\s\S]*?<\/section>/.exec(html)?.[0];
+  assert.ok(section, 'expected a dialog section');
+
+  const content = dialogPart('DialogContent');
+  assert.ok(content.classes);
+  assert.ok(section!.includes(`<figcaption>DialogContent</figcaption><div class="${content.classes}">DialogContent</div>`));
+
+  assert.doesNotMatch(section!, /no static styles found/, 'a component with at least one styled part must never show the placeholder');
+  assert.doesNotMatch(section!, /behavior component/);
+});
+
+test('previewHtml applies the small semantic-tag heuristic: Title -> h3-ish, Description -> p, everything else -> div', () => {
+  const dialogInfo: ComponentInfo = { slug: 'dialog', file: '/fake/project/src/ui/dialog.tsx', exportName: 'Dialog', importPath: '~/ui/dialog', parts: dialogParts };
+  const html = previewHtml(theme, [{ info: dialogInfo, examples: [] }]);
+
+  const title = dialogPart('DialogTitle');
+  assert.match(html, new RegExp(`<h3 class="${escapeRegExp(title.classes!)}">DialogTitle</h3>`));
+
+  const description = dialogPart('DialogDescription');
+  assert.match(html, new RegExp(`<p class="${escapeRegExp(description.classes!)}">DialogDescription</p>`));
+
+  const footer = dialogPart('DialogFooter'); // no "title"/"description" in the name -> plain div
+  assert.match(html, new RegExp(`<div class="${escapeRegExp(footer.classes!)}">DialogFooter</div>`));
+});
+
+test('previewHtml shows a read-only part as its name plus the muted reason, escaped', () => {
+  const dialogInfo: ComponentInfo = { slug: 'dialog', file: '/fake/project/src/ui/dialog.tsx', exportName: 'Dialog', importPath: '~/ui/dialog', parts: dialogParts };
+  const html = previewHtml(theme, [{ info: dialogInfo, examples: [] }]);
+  const trigger = dialogPart('DialogTrigger');
+  assert.equal(trigger.classes, undefined);
+  assert.equal(trigger.readOnlyReason, 'no static className found');
+  assert.match(html, /<p class="cn-lib-part-readonly" data-part="DialogTrigger">DialogTrigger: no static className found<\/p>/);
+});
+
+test('previewHtml shows a multi-branch part note, muted, only when present', () => {
+  const notedPart: PartInfo = { name: 'Sidebar', classes: 'flex h-full flex-col bg-sidebar', span: { start: 0, end: 0 }, note: '3 render branches; editing branch 1' };
+  const plainPart: PartInfo = { name: 'SidebarInset', classes: 'flex-1', span: { start: 0, end: 0 } };
+  const info: ComponentInfo = { slug: 'sidebar', file: '/fake/project/src/ui/sidebar.tsx', exportName: 'Sidebar', importPath: '~/ui/sidebar', parts: [notedPart, plainPart] };
+  const html = previewHtml(theme, [{ info, examples: [] }]);
+  assert.match(html, /<p class="cn-lib-part-note">3 render branches; editing branch 1<\/p>/);
+  // The note is scoped to its own part's figure, not duplicated onto a part with none.
+  const insetFigure = /<figure[^>]*data-part="SidebarInset"[\s\S]*?<\/figure>/.exec(html)?.[0];
+  assert.ok(insetFigure);
+  assert.doesNotMatch(insetFigure!, /cn-lib-part-note/);
+});
+
+test('previewHtml keeps a cva component\'s real examples AND lists its dynamic-only part as read-only (Button)', () => {
+  const button = readFileSync(new URL('./fixtures/shadcn-app/src/ui/button.tsx', import.meta.url), 'utf8');
+  const buttonParts = parseParts(button);
+  const infoWithParts: ComponentInfo = { ...buttonInfo, parts: buttonParts };
+  const html = previewHtml(theme, [{ info: infoWithParts, examples: buttonExamples }]);
+  const section = /<section[^>]*data-slug="button"[\s\S]*?<\/section>/.exec(html)?.[0];
+  assert.ok(section);
+  assert.match(section!, /<figcaption>variant: destructive<\/figcaption>/); // cva examples still render
+  assert.match(section!, /<p class="cn-lib-part-readonly" data-part="Button">Button: dynamic classes only<\/p>/);
+});
+
+test('previewHtml falls back to the placeholder (not a wall of read-only lines) when a component has parts but NONE have classes and no cva', () => {
+  const allReadOnly: PartInfo[] = [
+    { name: 'Foo', readOnlyReason: 'no static className found' },
+    { name: 'Bar', readOnlyReason: 'dynamic classes only' },
+  ];
+  const info: ComponentInfo = { slug: 'foo', file: '/fake/project/src/ui/foo.tsx', exportName: 'Foo', importPath: '~/ui/foo', parts: allReadOnly };
+  const html = previewHtml(theme, [{ info, examples: [] }]);
+  const section = /<section[^>]*data-slug="foo"[\s\S]*?<\/section>/.exec(html)?.[0];
+  assert.ok(section);
+  assert.match(section!, /no static styles found/);
+  assert.doesNotMatch(section!, /Foo:|Bar:/, 'the quiet placeholder wins over a noisy per-part listing when nothing is stylable');
+});
+
+test('previewHtml escapes a hostile part name, reason, and classes string (XSS)', () => {
+  const hostileStyled: PartInfo = { name: '<script>a</script>', classes: 'safe" onmouseover="alert(1)', span: { start: 0, end: 0 } };
+  const hostileReadOnly: PartInfo = { name: '<script>b</script>', readOnlyReason: '<script>c</script>' };
+  const info: ComponentInfo = { slug: 'hostile', file: '/fake/x', exportName: 'Hostile', importPath: '~/x', parts: [hostileStyled, hostileReadOnly] };
+  const html = previewHtml(theme, [{ info, examples: [] }]);
+
+  assert.doesNotMatch(html, /<script>a<\/script>/);
+  assert.doesNotMatch(html, /<script>b<\/script>/);
+  assert.doesNotMatch(html, /<script>c<\/script>/);
+  assert.doesNotMatch(html, /safe" onmouseover="alert\(1\)/);
+  assert.equal((html.match(/<script/g) ?? []).length, 1); // only the vendored runtime's own
+
+  assert.match(html, /&lt;script&gt;a&lt;\/script&gt;/);
+  assert.match(html, /&lt;script&gt;b&lt;\/script&gt;/);
+  assert.match(html, /&lt;script&gt;c&lt;\/script&gt;/);
+  assert.match(html, /safe&quot; onmouseover=&quot;alert\(1\)/);
+});
+
+/** Escape a string for embedding inside a `new RegExp(...)` literal test pattern. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

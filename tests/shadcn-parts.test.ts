@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseParts, splicePart } from '../src/adapters/shadcn/parts.ts';
 import { findCva } from '../src/adapters/shadcn/cva.ts';
+import { inventory, writePart } from '../src/adapters/shadcn/inventory.ts';
+import { installFiles } from '../src/design-files.ts';
+import { clone } from './fixtures/clone.ts';
 import type { PartInfo } from '../src/adapters/types.ts';
 
 const DIALOG = readFileSync(new URL('./fixtures/shadcn-app/src/ui/dialog.tsx', import.meta.url), 'utf8');
@@ -385,4 +388,101 @@ test('a cva component file (button.tsx) still parses parts: Button is dynamic-on
   assert.equal(button.classes, undefined);
   assert.equal(button.span, undefined);
   assert.equal(button.readOnlyReason, 'dynamic classes only');
+});
+
+// ---- inventory() attaches parts; writePart (Task 2) ------------------------------------------
+
+test('inventory() attaches parts to every component, independently of cva validity', (t) => {
+  const root = clone(t);
+  const items = inventory(root);
+
+  const dialog = items.find((i) => i.slug === 'dialog')!;
+  assert.ok(dialog.parts, 'dialog.tsx has no cva() at all and must still get parts');
+  assert.deepEqual(dialog.parts!.map((p) => p.name), [
+    'Dialog', 'DialogTrigger', 'DialogPortal', 'DialogClose',
+    'DialogOverlay', 'DialogContent', 'DialogHeader', 'DialogFooter',
+    'DialogTitle', 'DialogDescription',
+  ]);
+  assert.equal(dialog.cva, undefined);
+
+  const button = items.find((i) => i.slug === 'button')!;
+  assert.ok(button.cva, 'button.tsx has a valid cva()');
+  assert.equal(button.parts!.length, 1);
+  assert.equal(button.parts![0].name, 'Button');
+  assert.equal(button.parts![0].readOnlyReason, 'dynamic classes only');
+
+  const badge = items.find((i) => i.slug === 'badge')!;
+  assert.equal(badge.cva, undefined);
+  assert.match(badge.readOnlyReason!, /template interpolation/, 'badge is read-only at the cva level (its cva() failed to parse)');
+  assert.ok(badge.parts, 'a read-only (cva parse failed) component still gets parts — parts are independent of cva validity');
+  assert.equal(badge.parts!.length, 1);
+  assert.equal(badge.parts![0].name, 'Badge');
+});
+
+test('writePart: happy path on DialogContent — byte-identical elsewhere, fixed point, installable', (t) => {
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  const before = readFileSync(dialog.file, 'utf8');
+  const contentBefore = dialog.parts!.find((p) => p.name === 'DialogContent')!;
+  assert.ok(contentBefore.span);
+
+  const newClasses = 'fixed left-[50%] top-[50%] z-50 grid w-full max-w-md gap-4 border bg-background p-6 shadow-lg sm:rounded-lg';
+  const write = writePart(dialog, 'DialogContent', newClasses);
+  assert.equal(write.path, dialog.file);
+  assert.ok(write.root);
+
+  installFiles(root, [write]);
+  const after = readFileSync(dialog.file, 'utf8');
+
+  // Byte-identical outside the spliced span.
+  assert.equal(after.slice(0, contentBefore.span!.start), before.slice(0, contentBefore.span!.start), 'prefix byte-identical');
+  const beforeSuffix = before.slice(contentBefore.span!.end);
+  assert.equal(after.slice(after.length - beforeSuffix.length), beforeSuffix, 'suffix byte-identical');
+  assert.ok(after.includes(`"${newClasses}"`));
+
+  // Fixed point: re-inventorying the written file reads the part back as exactly what was written.
+  const reInventoried = inventory(root).find((i) => i.slug === 'dialog')!;
+  const contentAfter = reInventoried.parts!.find((p) => p.name === 'DialogContent')!;
+  assert.equal(contentAfter.classes, newClasses);
+
+  // Hand-authored siblings (e.g. DialogHeader) are untouched.
+  const headerAfter = reInventoried.parts!.find((p) => p.name === 'DialogHeader')!;
+  assert.equal(headerAfter.classes, 'flex flex-col space-y-1.5 text-center sm:text-left');
+});
+
+test('writePart throws naming the component and part when the part does not exist', (t) => {
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  const before = readFileSync(dialog.file, 'utf8');
+  assert.throws(() => writePart(dialog, 'NoSuchPart', 'x'), /"dialog" has no part named "NoSuchPart"/);
+  assert.equal(readFileSync(dialog.file, 'utf8'), before, 'a rejected writePart call must never touch the file');
+});
+
+test('writePart throws naming the part when it is read-only, writing nothing', (t) => {
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  const before = readFileSync(dialog.file, 'utf8');
+  const portal = dialog.parts!.find((p) => p.name === 'DialogPortal')!;
+  assert.equal(portal.span, undefined, 'DialogPortal is a plain alias with no static className: read-only');
+  assert.throws(() => writePart(dialog, 'DialogPortal', 'x'), /"dialog"'s part "DialogPortal" is read-only/);
+  assert.equal(readFileSync(dialog.file, 'utf8'), before, 'a rejected writePart call must never touch the file');
+});
+
+test('writePart rejects an injection attempt in classes (quote breakout), writing nothing', (t) => {
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  const before = readFileSync(dialog.file, 'utf8');
+  assert.throws(() => writePart(dialog, 'DialogHeader', 'bg-primary" onClick={alert(1)} x="'), /unsafe class string/);
+  assert.equal(readFileSync(dialog.file, 'utf8'), before, 'a rejected writePart call must never touch the file');
+});
+
+test('writePart rejects classes containing braces or a backtick, writing nothing', (t) => {
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  assert.throws(() => writePart(dialog, 'DialogFooter', 'bg-primary}`evil`{'), /unsafe class string/);
+});
+
+test('writePart is exposed on the shadcn adapter object', async () => {
+  const { shadcnAdapter } = await import('../src/adapters/shadcn/index.ts');
+  assert.equal(typeof shadcnAdapter.writePart, 'function');
 });

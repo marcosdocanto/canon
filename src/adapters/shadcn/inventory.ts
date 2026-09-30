@@ -6,6 +6,7 @@ import type { Write } from '../../design-files.ts';
 import type { ComponentInfo, CvaSpec } from '../types.ts';
 import { readConfig } from './config.ts';
 import { CvaParseError, findCva, parseCva, spliceCva } from './cva.ts';
+import { parseParts, splicePart } from './parts.ts';
 
 const LIST_EXPORT = /export\s*\{([^}]*)\}/g;
 const DECL_EXPORT = /export\s+(?:function\*?|class|const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
@@ -53,6 +54,10 @@ function unsafeVariantKey(spec: CvaSpec): string | undefined {
 // literal, or a backtick aimed at a template-literal context elsewhere) before it ever reaches
 // disk. The round-trip check at the end of `writeVariants` is the final backstop if this regex
 // were ever wrong about what's actually safe.
+//
+// `writePart` reuses this SAME grammar (via `validateClassList`) for a part's whole `classes`
+// string: a part's literal is spliced back by `splicePart` the same way a cva class string is by
+// `spliceCva` — wrapped in quotes, no escaping applied — so it needs the identical guarantee.
 const SAFE_CLASS_LIST = /^[^\s"'`{}\\]+(?: [^\s"'`{}\\]+)*$/;
 
 function validateClassList(classes: string[], where: string): void {
@@ -129,6 +134,13 @@ function findProjectRoot(dir: string): string {
  * genuine PascalCase named export at all — e.g. a barrel `index.tsx` holding only
  * `export * from './button'` — isn't a component and is skipped from the inventory entirely,
  * rather than being listed under a fabricated name.
+ *
+ * Every entry also gets `parts` (`parseParts(source)`, see shadcn/parts.ts): one `PartInfo` per
+ * exported PascalCase subcomponent in the SAME file, parsed from the SAME source read used for
+ * `cva()` above. This is entirely independent of the `cva()` outcome — a read-only component
+ * (its `cva()` failed to parse, or had an unsafe variant key) still gets its parts, since parts
+ * and cva are unrelated axes of a component's styling and a file can carry both, either, or
+ * neither.
  */
 export function inventory(root: string): ComponentInfo[] {
   root = realpathSync(root); // never trust the caller's path to already be canonical (see connect.ts, install.ts)
@@ -148,7 +160,7 @@ export function inventory(root: string): ComponentInfo[] {
     const source = readFileSync(file, 'utf8');
     const exportName = firstPascalExport(source);
     if (!exportName) continue; // no real component export (e.g. a re-export-only barrel file)
-    const info: ComponentInfo = { slug, file, exportName, importPath: `${uiImportBase}/${slug}` };
+    const info: ComponentInfo = { slug, file, exportName, importPath: `${uiImportBase}/${slug}`, parts: parseParts(source) };
 
     // Only the first cva() call in the file is read; multiple cva() calls per file are unsupported in v1.
     const span = findCva(source);
@@ -208,6 +220,53 @@ export function writeVariants(component: ComponentInfo, spec: CvaSpec): Write {
     throw new Error(`shadcn adapter: "${component.slug}"'s just-spliced cva() failed to round-trip: unsupported ${error.construct}`);
   }
   if (!isDeepStrictEqual(roundTripped, spec)) throw new Error(`shadcn adapter: "${component.slug}"'s just-spliced cva() did not round-trip to the same spec`);
+
+  return { root: findProjectRoot(dirname(file)), path: file, content: Buffer.from(content, 'utf8') };
+}
+
+/** True when two byte-offset spans (each end-exclusive) overlap at all. */
+function spansOverlap(a: { start: number; end: number }, b: { start: number; end: number }): boolean {
+  return a.start < b.end && b.start < a.end;
+}
+
+/**
+ * Splice an edited class string into one exported subcomponent's ("part's") className literal —
+ * see shadcn/parts.ts. Validates `classes` first with the SAME safe space-separated class-token
+ * grammar `writeVariants` enforces on every `cva()` class string (`validateClassList` /
+ * `SAFE_CLASS_LIST` — no quotes, backtick, braces or backslash) and refuses, naming the offending
+ * value, before touching the file at all. Re-reads the file and re-parses its parts fresh —
+ * `parseParts` is re-run rather than trusting `component.parts` from a possibly-stale `inventory()`
+ * call, since a part's span may have moved since then — and refuses, naming the component and
+ * part, when `partName` doesn't exist on this file or is read-only (no literal to splice; see
+ * `PartInfo.readOnlyReason`). As a defensive backstop for the disjointness a part's span and the
+ * file's own `cva()` span are assumed to have (see the NOTE in shadcn/parts.ts's `parseParts`
+ * docstring), also refuses — without touching the file — if the located part's span were ever
+ * found to overlap the file's `cva()` span. Finally, before returning the `Write`, re-parses the
+ * JUST-SPLICED source and checks the named part's literal now reads back as EXACTLY `classes` — a
+ * `splicePart` → `parseParts` fixed point, mirroring `writeVariants`'s own round-trip check —
+ * refusing rather than silently writing a file whose part reads back differently than intended.
+ */
+export function writePart(component: ComponentInfo, partName: string, classes: string): Write {
+  validateClassList([classes], `"${component.slug}" part "${partName}"`);
+
+  const file = realpathSync(component.file); // never trust the caller's path to already be canonical (see connect.ts, install.ts)
+  const source = readFileSync(file, 'utf8');
+  const parts = parseParts(source); // re-parsed fresh, same as inventory() would today
+  const part = parts.find((p) => p.name === partName);
+  if (!part) throw new Error(`shadcn adapter: "${component.slug}" has no part named "${partName}"`);
+  if (!part.span) throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" is read-only${part.readOnlyReason ? ` (${part.readOnlyReason})` : ''}`);
+
+  const cvaSpan = findCva(source);
+  if (cvaSpan && spansOverlap(part.span, cvaSpan)) {
+    throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" span overlaps its cva() call — refusing to splice`);
+  }
+
+  const content = splicePart(source, part, classes);
+
+  const roundTripped = parseParts(content).find((p) => p.name === partName);
+  if (!roundTripped || roundTripped.classes !== classes) {
+    throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" did not round-trip to the same classes`);
+  }
 
   return { root: findProjectRoot(dirname(file)), path: file, content: Buffer.from(content, 'utf8') };
 }

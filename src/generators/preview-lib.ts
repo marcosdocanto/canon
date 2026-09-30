@@ -6,7 +6,7 @@
 // `RenderExample[]`). The ONLY file this module reads is Canon's own vendored asset
 // (`assets/tailwind-play.js`, the @tailwindcss/browser runtime) — never a repo file.
 import { readFileSync } from 'node:fs';
-import type { ComponentInfo, CvaSpec, LibraryTheme, RenderExample } from '../adapters/types.ts';
+import type { ComponentInfo, CvaSpec, LibraryTheme, PartInfo, RenderExample } from '../adapters/types.ts';
 
 /** Pinned version of the vendored @tailwindcss/browser runtime in assets/tailwind-play.js. Keep in sync when bumping the asset. */
 export const TAILWIND_RUNTIME_VERSION = '4.3.3';
@@ -115,33 +115,95 @@ function exampleMarkup(info: ComponentInfo, example: RenderExample): string {
 }
 
 /**
- * The body for a component with no `cva()` to preview: a single muted line, never the old bare
- * `<Tag>…</Tag>` fallback. That fallback rendered with zero classes (nothing but `className`, which
- * a generic example never sets) and, for a component with no per-slug render template, literally
- * duplicated the component's own name (its example's title defaults to `exportName`) right under an
- * `<h2>` already showing that same name, above a lone "…" placeholder — e.g. a whole "Accordion"
- * section reading "Accordion" / "Accordion" / "…". None of that is a real preview of styling
- * (there isn't any to show), so it's replaced with one line: the parse failure reason when `cva()`
- * exists but couldn't be read, or a fixed explanatory note when the component simply has none.
+ * A small, name-only heuristic for the semantic HTML tag a styled part's preview element should
+ * use — never inspects the part's classes or any other data, just its own name (case-insensitive
+ * substring match): "…Title…" reads as a heading-ish element, "…Description…" as a paragraph,
+ * everything else falls back to a plain `div`. Deliberately tiny and data-free (no per-slug table)
+ * — this is a cosmetic nicety for the preview, not a claim about the part's real DOM role.
  */
-function noVariantsBody(info: ComponentInfo): string {
-  if (info.readOnlyReason) {
-    return `<p class="cn-lib-readonly" data-readonly-reason="${escapeHtml(info.readOnlyReason)}">Read-only: ${escapeHtml(info.readOnlyReason)}</p>`;
-  }
-  return `<p class="cn-lib-placeholder">no styled variants — behavior component</p>`;
+function partTagFor(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.includes('title')) return 'h3';
+  if (lower.includes('description')) return 'p';
+  return 'div';
 }
 
 /**
- * One `<section data-slug>` per component: its real per-variant examples when `cva()` gives it
- * something to show (Alert/Badge/Button-style components), or the single muted placeholder line
- * from `noVariantsBody` otherwise — a component with no `cva()` has no styled variants to preview
- * either way, whether that's because it never had one or because its `cva()` didn't parse.
+ * One `<figure>` for a part WITH classes: its own semantic tag (`partTagFor`), the part's real
+ * classes applied, its name as both the caption and the element's own text (so there's something
+ * visible to look at even for an empty-ish class string), and — when `parseParts` found more than
+ * one render branch yielding a literal (see `PartInfo.note` in shadcn/parts.ts) — a muted note
+ * underneath naming that honestly, rather than silently hiding it.
+ */
+function styledPartMarkup(part: PartInfo): string {
+  const tag = partTagFor(part.name);
+  const noteHtml = part.note ? `<p class="cn-lib-part-note">${escapeHtml(part.note)}</p>` : '';
+  return `<figure class="cn-lib-part" data-part="${escapeHtml(part.name)}"><figcaption>${escapeHtml(part.name)}</figcaption><${tag} class="${escapeHtml(part.classes!)}">${escapeHtml(part.name)}</${tag}>${noteHtml}</figure>`;
+}
+
+/** One muted line for a read-only part: its name plus why it can't be edited (`PartInfo.readOnlyReason`). */
+function readOnlyPartMarkup(part: PartInfo): string {
+  const reason = part.readOnlyReason ?? 'no static className found';
+  return `<p class="cn-lib-part-readonly" data-part="${escapeHtml(part.name)}">${escapeHtml(part.name)}: ${escapeHtml(reason)}</p>`;
+}
+
+/** One `<div class="cn-lib-parts">` holding every part of a component: styled ones as elements, read-only ones as muted name+reason lines, in the same order `parseParts` returned them. */
+function partsBlock(parts: PartInfo[]): string {
+  const items = parts.map((part) => (part.classes !== undefined ? styledPartMarkup(part) : readOnlyPartMarkup(part)));
+  return `<div class="cn-lib-parts">${items.join('\n')}</div>`;
+}
+
+/** The muted, escaped "Read-only: <reason>" line for a component whose own `cva()` exists but couldn't be read (see `ComponentInfo.readOnlyReason`). */
+function readOnlyReasonBody(info: ComponentInfo): string {
+  return `<p class="cn-lib-readonly" data-readonly-reason="${escapeHtml(info.readOnlyReason!)}">Read-only: ${escapeHtml(info.readOnlyReason!)}</p>`;
+}
+
+/**
+ * The body for a component with truly nothing stylable to show: no `cva()`, no `cva()` parse
+ * failure to explain, and not one of its parts has an editable literal either. Never the old bare
+ * `<Tag>…</Tag>` fallback — that fallback rendered with zero classes (nothing but `className`,
+ * which a generic example never sets) and, for a component with no per-slug render template,
+ * literally duplicated the component's own name (its example's title defaults to `exportName`)
+ * right under an `<h2>` already showing that same name, above a lone "…" placeholder. It's also
+ * never the old "behavior component" wording, which presumed a JS/behavior-only component when
+ * really this just means the scanner found no static literal anywhere.
+ */
+function placeholderBody(): string {
+  return `<p class="cn-lib-placeholder">no static styles found</p>`;
+}
+
+/**
+ * A component's card body, combining its `cva()` examples (if any) with its parts (if any):
+ * - `cva()` present: the real per-variant examples, plus a parts block if the file has parts too
+ *   (e.g. a helper subcomponent alongside the cva'd one).
+ * - no `cva()`, but at least one part has an editable literal: just the parts block — every part
+ *   is shown, styled ones as elements and read-only ones as muted name+reason lines.
+ * - no `cva()`, no styled part, but the component's OWN `cva()` failed to parse: the existing
+ *   `readOnlyReasonBody` (unchanged — a `readOnlyReason` at this level is a stronger, more
+ *   specific signal than the generic placeholder and must not be replaced by it).
+ * - otherwise (zero `cva()`, zero parts-with-classes, no `readOnlyReason`): the one-line
+ *   `placeholderBody` — the ONLY case that gets it.
+ */
+function componentBody(info: ComponentInfo, examples: RenderExample[]): string {
+  const parts = info.parts ?? [];
+  const hasStyledPart = parts.some((part) => part.classes !== undefined);
+
+  if (info.cva) {
+    const examplesHtml = `<div class="cn-lib-examples">${examples.map((example) => exampleMarkup(info, example)).join('\n')}</div>`;
+    return parts.length > 0 ? examplesHtml + partsBlock(parts) : examplesHtml;
+  }
+  if (hasStyledPart) return partsBlock(parts);
+  if (info.readOnlyReason) return readOnlyReasonBody(info);
+  return placeholderBody();
+}
+
+/**
+ * One `<section data-slug>` per component: `componentBody` decides, per component, whether that's
+ * real `cva()` examples, a parts breakdown, a read-only reason, or the muted zero-style placeholder.
  */
 function componentSection(entry: { info: ComponentInfo; examples: RenderExample[] }): string {
   const { info, examples } = entry;
-  const body = info.cva
-    ? `<div class="cn-lib-examples">${examples.map((example) => exampleMarkup(info, example)).join('\n')}</div>`
-    : noVariantsBody(info);
+  const body = componentBody(info, examples);
   return `<section data-slug="${escapeHtml(info.slug)}" class="cn-lib-component">
   <h2>${escapeHtml(info.exportName)}</h2>
   ${body}
@@ -215,7 +277,24 @@ body {
   gap: 8px;
   min-width: 0;
 }
-.cn-lib-example > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }`;
+.cn-lib-example > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }
+.cn-lib-parts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  align-items: start;
+  gap: 14px;
+  max-width: 100%;
+}
+.cn-lib-part {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.cn-lib-part > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }
+.cn-lib-part-readonly, .cn-lib-part-note { margin: 0; font-size: 12px; color: ${CHROME_MUTED}; }`;
 
 /**
  * Build the complete library-mode preview HTML document: a raw `:root`/`.dark` block with the

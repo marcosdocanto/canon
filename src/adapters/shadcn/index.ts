@@ -2,7 +2,7 @@
 import type { Adapter } from '../types.ts';
 import { readConfig } from './config.ts';
 import { readTheme, writeTheme } from './theme.ts';
-import { inventory, writeVariants } from './inventory.ts';
+import { inventory, writeVariants, writePart } from './inventory.ts';
 import { renderSpec } from './render.ts';
 import { SEMANTIC_MAP, systemToTheme, themeToOverrides } from './mapping.ts';
 
@@ -13,6 +13,7 @@ export const shadcnAdapter: Adapter = {
   writeTheme,
   inventory,
   writeVariants,
+  writePart,
   async install(root, slugs, exec) {
     const result = await exec('npx', ['shadcn@latest', 'add', '--yes', ...slugs], { cwd: root });
     if (result.status !== 0) throw new Error(`shadcn adapter: install failed (exit ${result.status}): ${result.stderr}`);
