@@ -12,27 +12,35 @@ import { installFiles, type Write } from './design-files.ts';
 import { designmdLib } from './generators/designmd-lib.ts';
 import { generate as generateAgentsLib } from './generators/agents-lib.ts';
 import { storyWrites } from './generators/stories.ts';
+import type { ComponentInfo, LibraryTheme } from './adapters/types.ts';
 
 /** Every file `buildLib` writes into the design dist (relative to it) — see the two `write()` calls below. */
 const LIB_DIST_FILES = ['DESIGN.md', 'DESIGN.compact.md', 'agents/AGENTS.md', 'agents/CLAUDE.md', 'agents/SKILL.md', 'agents/design-system.mdc', 'agents/PROMPT.md'];
 
 /**
- * Build the library-mode dist: `design/<out>/DESIGN.md`, `DESIGN.compact.md` and
+ * Pure staging for the library-mode dist: `design/<out>/DESIGN.md`, `DESIGN.compact.md` and
  * `agents/{AGENTS,CLAUDE,SKILL,PROMPT}.md` + `agents/design-system.mdc`, plus one Storybook story
- * file per inventoried component under `<root>/stories/canon/`. `root` is the target repo (holding
- * the recorded adapter and the library's own code); `designDir` is where the design source
- * (`system.json`, …) lives — only `meta` is read from it. Two `installFiles` batches, dist then
- * stories, each all-or-nothing.
+ * file per inventoried component under `<root>/stories/canon/` — returned as `Write`s, nothing
+ * touches disk (`storyWrites` only *reads* existing story files, to refuse clobbering a hand-edited
+ * one). `root` is the target repo (holding the recorded adapter and the library's own code);
+ * `designDir` is where the design source (`system.json`, …) lives — only `meta` is read from it.
+ *
+ * `overrides`, when given, supplies the theme/component snapshot to document instead of reading it
+ * fresh via the adapter — for a caller (the save endpoint, `serve-lib.ts`) that has already computed
+ * the *next* theme/components in memory but hasn't written them yet: composing this function's
+ * output with the not-yet-applied theme/variant `Write`s into one `installFiles` batch means the
+ * regenerated DESIGN.md/stories describe the state the save is about to commit, not the state
+ * mid-transaction disk still holds.
  */
-export async function buildLib(root: string, designDir: string): Promise<void> {
+export async function buildLibWrites(root: string, designDir: string, overrides?: { theme: LibraryTheme; components: ComponentInfo[] }): Promise<Write[]> {
   root = realpathSync(root); // never trust the caller's path to already be canonical (see inventory.ts, install.ts)
   designDir = realpathSync(designDir);
   const system = loadDesignDir(designDir);
   const project = findProject(root);
   if (!project?.adapter) throw new Error(`No adapter configured for ${root}. Run \`canon adopt\` or \`canon init --lib <id>\` first.`);
   const adapter = getAdapter(project.adapter);
-  const theme = adapter.readTheme(root);
-  const components = adapter.inventory(root);
+  const theme = overrides?.theme ?? adapter.readTheme(root);
+  const components = overrides?.components ?? adapter.inventory(root);
 
   const dist = join(designDir, system.meta.out || 'dist');
   const distWrites: Write[] = [];
@@ -42,10 +50,21 @@ export async function buildLib(root: string, designDir: string): Promise<void> {
   write('DESIGN.md', full);
   write('DESIGN.compact.md', compact);
   generateAgentsLib(system, theme, components, write);
-  installFiles(designDir, distWrites);
 
   const stories = storyWrites(root, adapter, components);
-  if (stories.length) installFiles(root, stories);
+  return [...distWrites, ...stories];
+}
+
+/**
+ * Build the library-mode dist and install it: `installFiles` over `buildLibWrites`' staged
+ * output, as a single atomic batch (dist files and stories together) — no test pins the previous
+ * implementation's two separate `installFiles` calls (dist, then stories) as an observable
+ * behavior, and one batch is strictly safer: a story-generation failure (e.g. a hand-edited,
+ * unmarked story file) can no longer leave DESIGN.md rewritten while stories are not.
+ */
+export async function buildLib(root: string, designDir: string): Promise<void> {
+  const writes = await buildLibWrites(root, designDir);
+  installFiles(designDir, writes); // every Write carries its own `root`; this is only installFiles' fallback
 }
 
 /**

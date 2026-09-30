@@ -7,8 +7,9 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getAdapter } from './adapters/index.ts';
-import type { ComponentInfo, LibraryTheme } from './adapters/types.ts';
-import { HttpError, record, requireValue } from './design-files.ts';
+import type { Adapter, ComponentInfo, CvaSpec, LibraryTheme } from './adapters/types.ts';
+import { HttpError, installFiles, record, requireValue, type Write } from './design-files.ts';
+import { buildLibWrites } from './build-lib.ts';
 import { previewHtml } from './generators/preview-lib.ts';
 import { semanticClasses } from './generators/agents-lib.ts';
 import { checkRequest, decodePath, json, readBody, reportError, serveStatic } from './serve-shared.ts';
@@ -81,15 +82,94 @@ function previewBody(value: unknown): LibraryTheme {
   return draftTheme(body.theme);
 }
 
+function classList(value: unknown, name: string): string[] {
+  requireValue(Array.isArray(value) && value.every((item) => typeof item === 'string'), `${name} must be an array of strings`);
+  return value as string[];
+}
+
+function matchValue(value: unknown, name: string): string | boolean {
+  requireValue(typeof value === 'string' || typeof value === 'boolean', `${name} must be a string or boolean`);
+  return value as string | boolean;
+}
+
+/**
+ * Validate a `POST /api/lib/save` component entry into a `CvaSpec`: shape only (arrays of strings,
+ * string/boolean match values) — deliberately NOT the safety guard `inventory()`'s
+ * `unsafeVariantKey` applies when *reading* a cva() back (an axis/value unsafe to interpolate
+ * unescaped into a rendered/story JSX attribute). `writeVariants` is the contract point for
+ * rejecting a spec it can't faithfully or safely write (Task 4 hardens that); until then, a
+ * shape-valid-but-hostile spec is accepted here and left to the adapter.
+ */
+function draftCvaSpec(value: unknown, name: string): CvaSpec {
+  const spec = record(value, name);
+  const base = classList(spec.base, `${name}.base`);
+  const rawVariants = record(spec.variants, `${name}.variants`);
+  const variants: CvaSpec['variants'] = {};
+  for (const [axis, options] of Object.entries(rawVariants)) {
+    const rawOptions = record(options, `${name}.variants.${axis}`);
+    const inner: Record<string, string[]> = {};
+    for (const [key, classes] of Object.entries(rawOptions)) inner[key] = classList(classes, `${name}.variants.${axis}.${key}`);
+    variants[axis] = inner;
+  }
+  requireValue(Array.isArray(spec.compoundVariants), `${name}.compoundVariants must be an array`);
+  const compoundVariants = (spec.compoundVariants as unknown[]).map((entry, index) => {
+    const e = record(entry, `${name}.compoundVariants[${index}]`);
+    const rawMatch = record(e.match, `${name}.compoundVariants[${index}].match`);
+    const match: Record<string, string | boolean> = {};
+    for (const [key, v] of Object.entries(rawMatch)) match[key] = matchValue(v, `${name}.compoundVariants[${index}].match.${key}`);
+    return { match, classes: classList(e.classes, `${name}.compoundVariants[${index}].classes`) };
+  });
+  const rawDefaults = record(spec.defaultVariants, `${name}.defaultVariants`);
+  const defaultVariants: Record<string, string | boolean> = {};
+  for (const [key, v] of Object.entries(rawDefaults)) defaultVariants[key] = matchValue(v, `${name}.defaultVariants.${key}`);
+  return { base, variants, compoundVariants, defaultVariants };
+}
+
+interface SaveBody { theme?: LibraryTheme; components?: Record<string, CvaSpec>; hashes: Record<string, string> }
+
+/** Validate a `POST /api/lib/save` body: only `theme` (optional), `components` (optional) and `hashes` (required) at the top level. */
+function saveBody(value: unknown): SaveBody {
+  const body = record(value, 'Save body');
+  for (const key of Object.keys(body)) requireValue(key === 'theme' || key === 'components' || key === 'hashes', `Unknown save field: ${key}`);
+  requireValue('hashes' in body, 'Save body requires a hashes field');
+  const rawHashes = record(body.hashes, 'hashes');
+  const hashes: Record<string, string> = {};
+  for (const [file, hash] of Object.entries(rawHashes)) {
+    requireValue(typeof hash === 'string' && hash.length > 0, `hashes.${file} must be a nonempty string`);
+    hashes[file] = hash;
+  }
+  const theme = 'theme' in body ? draftTheme(body.theme) : undefined;
+  let components: Record<string, CvaSpec> | undefined;
+  if ('components' in body) {
+    const rawComponents = record(body.components, 'components');
+    components = {};
+    for (const [slug, spec] of Object.entries(rawComponents)) components[slug] = draftCvaSpec(spec, `components.${slug}`);
+  }
+  return { theme, components, hashes };
+}
+
+/** The `GET /api/lib/state` payload, built fresh off disk — also what a successful save responds with. */
+function readState(root: string, adapter: Adapter) {
+  const theme = adapter.readTheme(root);
+  const components = adapter.inventory(root);
+  return {
+    theme,
+    components: components.map(publicComponent),
+    vocabulary: vocabulary(theme),
+    hashes: stateHashes(theme, components),
+  };
+}
+
 /**
  * Request handler for an adapter-mode Studio: read-only theme/component state
  * (`GET /api/lib/state`), a live preview built from either the repo's current disk state
  * (`GET /api/lib/preview`) or an editor-supplied draft theme (`POST /api/lib/preview`, read-only —
  * zero disk writes either way), and the static lib-editor app for everything else. `root` is the
  * target repo (holding the library's own code and, at its own path, the theme file); `adapterId`
- * is its recorded adapter (`.canon/project.json`'s `adapter` field).
+ * is its recorded adapter (`.canon/project.json`'s `adapter` field); `designDir` is where the
+ * design source (`system.json`, …) lives, needed only by `POST /api/lib/save` to regenerate dist.
  */
-export function libHandler(root: string, adapterId: string): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+export function libHandler(root: string, adapterId: string, designDir: string): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const adapter = getAdapter(adapterId);
   const editorRoot = realpathSync(LIB_EDITOR_ROOT);
 
@@ -101,14 +181,7 @@ export function libHandler(root: string, adapterId: string): (req: IncomingMessa
 
       if (url === '/api/lib/state') {
         if (req.method !== 'GET') throw new HttpError(405, 'Use GET for /api/lib/state');
-        const theme = adapter.readTheme(root);
-        const components = adapter.inventory(root);
-        json(res, 200, {
-          theme,
-          components: components.map(publicComponent),
-          vocabulary: vocabulary(theme),
-          hashes: stateHashes(theme, components),
-        });
+        json(res, 200, readState(root, adapter));
         return;
       }
 
@@ -122,7 +195,76 @@ export function libHandler(root: string, adapterId: string): (req: IncomingMessa
         return;
       }
 
+      if (url === '/api/lib/save') {
+        if (req.method !== 'POST') throw new HttpError(405, 'Use POST for /api/lib/save');
+        await handleSave(req, res, root, designDir, adapter);
+        return;
+      }
+
       serveStatic(editorRoot, url, req, res, 'index.html');
     } catch (error) { reportError(req, res, error); }
   };
+}
+
+/**
+ * `POST /api/lib/save`: the transactional library-studio save. Order, matching the brief:
+ *   1. Shape-validate the body (unknown top-level field → 400) and every slug named in `components`
+ *      against the CURRENT inventory (unknown or read-only → 422, naming the slug).
+ *   2. Every file this save will touch (the theme file, when `theme` is present; each named
+ *      component's file) must have a hash in the body's `hashes` — a missing one is a 400 (a client
+ *      bug: saving over an unverified file defeats conflict safety). Then re-hash EVERY file listed
+ *      in `hashes` (not only the touched ones — the client's whole last-known snapshot) against disk
+ *      — any mismatch is a 409 naming that file, before anything is written.
+ *   3. Stage `adapter.writeTheme` (theme present) and `adapter.writeVariants` per named component
+ *      (an adapter throw is a 422 naming the slug, nothing written) plus the regenerated dist +
+ *      stories (`buildLibWrites`, fed the in-memory next theme/components so DESIGN.md/stories
+ *      describe what this save is about to commit, not stale disk).
+ *   4. One `installFiles` batch — atomic, rolled back whole on any failure — then respond with the
+ *      same payload shape as `GET /api/lib/state`, read fresh off disk.
+ */
+async function handleSave(req: IncomingMessage, res: ServerResponse, root: string, designDir: string, adapter: Adapter): Promise<void> {
+  const body = saveBody(await readBody(req));
+  const currentTheme = adapter.readTheme(root);
+  const currentComponents = adapter.inventory(root);
+  const infoBySlug = new Map(currentComponents.map((c) => [c.slug, c]));
+
+  if (body.theme) requireValue(body.theme.file === currentTheme.file, `theme.file must be this project's current theme file (${currentTheme.file})`);
+
+  for (const slug of Object.keys(body.components ?? {})) {
+    const info = infoBySlug.get(slug);
+    if (!info) { json(res, 422, { slug, message: `unknown component slug: ${slug}` }); return; }
+    if (!info.cva) { json(res, 422, { slug, message: info.readOnlyReason ? `read-only: ${info.readOnlyReason}` : `${slug} is read-only` }); return; }
+  }
+
+  const touched = new Set<string>();
+  if (body.theme) touched.add(currentTheme.file);
+  for (const slug of Object.keys(body.components ?? {})) touched.add(infoBySlug.get(slug)!.file);
+  for (const file of touched) requireValue(file in body.hashes, `Missing hash for ${file}: every file this save touches must be covered by "hashes"`);
+
+  for (const [file, expected] of Object.entries(body.hashes)) {
+    let actual: string;
+    try { actual = sha256File(file); }
+    catch { json(res, 409, { file }); return; } // vanished/unreadable since the client last read state: a conflict, not a crash
+    if (actual !== expected) { json(res, 409, { file }); return; }
+  }
+
+  // Nothing above touches disk. From here, every Write is staged in memory; the single
+  // `installFiles` call below is the only place any of it is actually applied.
+  const writes: Write[] = [];
+  if (body.theme) writes.push(...adapter.writeTheme(root, body.theme));
+
+  const nextComponents = currentComponents.slice();
+  for (const [slug, spec] of Object.entries(body.components ?? {})) {
+    const info = infoBySlug.get(slug)!;
+    let write: Write;
+    try { write = adapter.writeVariants(info, spec); }
+    catch (error) { json(res, 422, { slug, message: (error as Error).message }); return; }
+    writes.push(write);
+    nextComponents[nextComponents.findIndex((c) => c.slug === slug)] = { ...info, cva: spec, readOnlyReason: undefined };
+  }
+
+  writes.push(...await buildLibWrites(root, designDir, { theme: body.theme ?? currentTheme, components: nextComponents }));
+
+  installFiles(root, writes);
+  json(res, 200, readState(root, adapter));
 }

@@ -203,6 +203,157 @@ test('/api/lib/preview rejects an unsupported method', async (t) => {
   assert.equal(res.status, 405);
 });
 
+test('POST /api/lib/save rejects a non-POST method', async (t) => {
+  const f = await libFixture(t);
+  const res = await f.request('/api/lib/save', { method: 'GET' });
+  assert.equal(res.status, 405);
+});
+
+test('POST /api/lib/save writes theme + variant changes in one atomic transaction and returns fresh state', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const button = state.components.find((c: any) => c.slug === 'button');
+  const themeFile = join(f.root, 'app', 'globals.css');
+  const buttonFile = join(f.root, 'src', 'ui', 'button.tsx');
+
+  const draftTheme = { ...state.theme, vars: { ...state.theme.vars, primary: { light: '#123456', dark: '#abcdef' } } };
+  const draftButton = JSON.parse(JSON.stringify(button.cva));
+  draftButton.variants.size.sm = ['h-8', 'rounded-md', 'px-5', 'text-xs'];
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ theme: draftTheme, components: { button: draftButton }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 200);
+  const body = res.json();
+
+  // Response is the same shape as GET /api/lib/state, reflecting the just-saved changes.
+  assert.equal(body.theme.vars.primary.light, '#123456');
+  assert.equal(body.theme.vars.primary.dark, '#abcdef');
+  const updatedButton = body.components.find((c: any) => c.slug === 'button');
+  assert.deepEqual(updatedButton.cva.variants.size.sm, ['h-8', 'rounded-md', 'px-5', 'text-xs']);
+
+  // Files actually changed on disk.
+  assert.match(readFileSync(themeFile, 'utf8'), /--primary:\s*#123456;/);
+  const buttonSource = readFileSync(buttonFile, 'utf8');
+  assert.match(buttonSource, /px-5/);
+  // Hand-added behavior code, outside the cva() span, survives byte-identically.
+  assert.ok(buttonSource.includes('pressedCount'), 'hand-added useState survives the splice');
+  assert.ok(buttonSource.includes('export { Button, buttonVariants }'), 'export line survives the splice');
+
+  // Response carries NEW hashes matching the just-written files, not the pre-save ones.
+  assert.equal(body.hashes[themeFile], sha256(themeFile));
+  assert.equal(body.hashes[buttonFile], sha256(buttonFile));
+  assert.notEqual(body.hashes[themeFile], state.hashes[themeFile]);
+  assert.notEqual(body.hashes[buttonFile], state.hashes[buttonFile]);
+
+  // Dist regenerated to describe the state just committed, not the pre-save one (DESIGN.md's theme
+  // table documents each var's value; it does not list variant class strings, only axis/value names).
+  const designMd = readFileSync(join(f.design, 'dist', 'DESIGN.md'), 'utf8');
+  assert.match(designMd, /#123456/);
+  assert.match(designMd, /#abcdef/);
+});
+
+test('POST /api/lib/save refuses on a conflicting hash: names the stale file, writes nothing', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const themeFile = join(f.root, 'app', 'globals.css');
+  const buttonFile = join(f.root, 'src', 'ui', 'button.tsx');
+  const cssBefore = readFileSync(themeFile, 'utf8');
+  const buttonBefore = readFileSync(buttonFile, 'utf8');
+
+  // Simulate a concurrent edit to a file the client isn't even touching in this save: its stale
+  // hash (still part of the client's last-known `hashes` snapshot) must still block the save.
+  writeFileSync(buttonFile, buttonBefore + '\n// concurrent edit\n');
+
+  const draft = { ...state.theme, vars: { ...state.theme.vars, primary: { light: '#000000', dark: '#ffffff' } } };
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ theme: draft, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.json().file, buttonFile);
+  assert.equal(readFileSync(themeFile, 'utf8'), cssBefore, 'globals.css must be untouched when the save is refused');
+});
+
+test('POST /api/lib/save rejects an unknown top-level field', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hashes: state.hashes, extra: 1 }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test('POST /api/lib/save refuses a read-only component slug (badge), naming it', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ components: { badge: { base: ['x'], variants: {}, compoundVariants: [], defaultVariants: {} } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 422);
+  assert.equal(res.json().slug, 'badge');
+  assert.equal(readFileSync(join(f.root, 'src', 'ui', 'badge.tsx'), 'utf8'), readFileSync(new URL('./fixtures/shadcn-app/src/ui/badge.tsx', import.meta.url), 'utf8'), 'badge.tsx must be untouched');
+});
+
+test('POST /api/lib/save refuses an unknown component slug, naming it', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ components: { nope: { base: ['x'], variants: {}, compoundVariants: [], defaultVariants: {} } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 422);
+  assert.equal(res.json().slug, 'nope');
+});
+
+test('POST /api/lib/save requires a hash for every file it is about to touch (missing hash is a client bug -> 400)', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const button = state.components.find((c: any) => c.slug === 'button');
+  const buttonFile = join(f.root, 'src', 'ui', 'button.tsx');
+  const buttonBefore = readFileSync(buttonFile, 'utf8');
+
+  // hashes omits the button file entirely, even though `components.button` is being saved.
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ components: { button: button.cva }, hashes: {} }),
+  });
+  assert.equal(res.status, 400);
+  assert.equal(readFileSync(buttonFile, 'utf8'), buttonBefore, 'button.tsx must be untouched');
+});
+
+// Task 4 (not yet implemented): `writeTheme` splices a theme var's NAME (for a var not already
+// present in the CSS block) and VALUE into the theme file with no injection guard — a name like
+// `primary;}body{background:red` would close the custom-property declaration and the `:root` block
+// early, then open an attacker-controlled rule. `draftTheme`'s own docstring already flags this as
+// out of scope for shape validation ("not the CSS-injection guard ... that belongs to the write
+// path, Task 4"). This test pins the DESIRED outcome (400/422, zero writes) for when Task 4 adds
+// that guard to `writeTheme`; skipped for now so the suite stays green.
+test('POST /api/lib/save rejects a CSS-injecting theme var name', { skip: 'Task 4: writeTheme has no var name/value injection guard yet (see comment above)' }, async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const hostileName = 'primary;}body{background:red';
+  const draft = { ...state.theme, vars: { ...state.theme.vars, [hostileName]: { light: 'red' } } };
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ theme: draft, hashes: state.hashes }),
+  });
+  assert.ok(res.status === 400 || res.status === 422, `expected 400/422 rejecting the hostile var name, got ${res.status}`);
+  const css = readFileSync(join(f.root, 'app', 'globals.css'), 'utf8');
+  assert.ok(!css.includes('body{background:red'), 'hostile CSS must never be spliced into the theme file');
+});
+
 test('GET / serves the bundled library-studio editor shell', async (t) => {
   const f = await libFixture(t);
   const res = await f.request('/');

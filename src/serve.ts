@@ -97,7 +97,7 @@ export function serve(dir: string, port = 4600, designDir?: string, opts: { proj
     // and the library-studio editor instead of Canon's native design/preview. Delegated in full —
     // native routes below (`/api/system`, `/api/save`, the design dist static files, …) never run.
     if (project?.adapter && projectRoot) {
-      const handler = libHandler(projectRoot, project.adapter);
+      const handler = libHandler(projectRoot, project.adapter, project.design);
       const server = createServer(async (req, res) => { await handler(req, res); });
       listen(server, port, (p) => `canon studio → http://127.0.0.1:${p}/  (library mode: ${project.adapter} adapter, ${projectRoot})`, opts).then(resolveServe, reject);
       return;
