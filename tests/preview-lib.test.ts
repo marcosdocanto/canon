@@ -123,7 +123,7 @@ test('previewHtml converts JSX-ish examples into real HTML with computed classes
   assert.match(html, /<button[^>]*class="[^"]*bg-primary[^"]*h-9[^"]*"/);
 });
 
-test('previewHtml renders a section per component keyed by slug, picking a sensible tag', () => {
+test('previewHtml renders a section per component keyed by slug', () => {
   const html = previewHtml(theme, [
     { info: buttonInfo, examples: buttonExamples },
     { info: badgeInfo, examples: badgeExamples },
@@ -132,8 +132,42 @@ test('previewHtml renders a section per component keyed by slug, picking a sensi
   assert.match(html, /<section[^>]*data-slug="button"/);
   assert.match(html, /<section[^>]*data-slug="badge"/);
   assert.match(html, /<section[^>]*data-slug="input"/);
+});
+
+test('previewHtml picks a sensible HTML tag per slug for a component that actually has cva (badge -> span, input -> self-closed void element)', () => {
+  const cvaBadge: ComponentInfo = { slug: 'badge', file: '/fake/project/src/ui/badge.tsx', exportName: 'Badge', importPath: '~/ui/badge', cva: { base: ['inline-flex'], variants: {}, compoundVariants: [], defaultVariants: {} } };
+  const cvaInput: ComponentInfo = { slug: 'input', file: '/fake/project/src/ui/input.tsx', exportName: 'Input', importPath: '~/ui/input', cva: { base: ['border'], variants: {}, compoundVariants: [], defaultVariants: {} } };
+  const html = previewHtml(theme, [
+    { info: cvaBadge, examples: [{ title: 'Badge', jsx: '<Badge>Badge</Badge>' }] },
+    { info: cvaInput, examples: [{ title: 'Input', jsx: '<Input placeholder="Email">…</Input>' }] },
+  ]);
   assert.match(html, /<span[^>]*>Badge<\/span>/); // badge -> span
   assert.match(html, /<input[^>]*\/>/); // input -> self-closed void element
+});
+
+test('previewHtml renders a compact muted placeholder for a cva-less component with no per-slug render template, instead of the old bare-tag text soup', () => {
+  const accordionInfo: ComponentInfo = { slug: 'accordion', file: '/fake/project/src/ui/accordion.tsx', exportName: 'Accordion', importPath: '~/ui/accordion' };
+  const accordionExamples: RenderExample[] = [{ title: 'Accordion', jsx: '<Accordion>…</Accordion>' }];
+  const html = previewHtml(theme, [{ info: accordionInfo, examples: accordionExamples }]);
+  const section = /<section[^>]*data-slug="accordion"[\s\S]*?<\/section>/.exec(html)?.[0];
+  assert.ok(section, 'expected an accordion section');
+  assert.match(section!, /<h2>Accordion<\/h2>/);
+  assert.match(section!, /no styled variants — behavior component/);
+  assert.doesNotMatch(section!, /<figcaption>/, 'no per-example markup for a component with no cva to preview');
+  assert.doesNotMatch(section!, /…/, 'the generic ellipsis filler must never leak into the placeholder');
+  // The component's name appears exactly once (the heading) — never duplicated into a caption too.
+  assert.equal((section!.match(/Accordion/g) ?? []).length, 1);
+});
+
+test('previewHtml gives the document real structural CSS: bordered component cards, a muted small-caps heading, and a muted example caption', () => {
+  const html = previewHtml(theme, [{ info: buttonInfo, examples: buttonExamples }]);
+  assert.match(html, /\.cn-lib-component\s*\{[^}]*border:[^}]*\}/s);
+  assert.match(html, /\.cn-lib-component\s*>\s*h2\s*\{[^}]*font-variant:\s*small-caps[^}]*\}/s);
+  assert.match(html, /\.cn-lib-example\s*>\s*figcaption\s*\{[^}]*\}/s);
+  // The preview canvas stays on the theme's own vars (this preview's whole purpose is showing the
+  // user's edited theme), never a Canon-branded background/foreground pair.
+  assert.match(html, /body\s*\{[^}]*background:\s*var\(--background/s);
+  assert.match(html, /body\s*\{[^}]*color:\s*var\(--foreground/s);
 });
 
 test('previewHtml notes a read-only component with its escaped reason', () => {

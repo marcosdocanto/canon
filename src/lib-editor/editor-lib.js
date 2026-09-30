@@ -321,14 +321,28 @@
     }
     for (const item of $$('.le-comp-item')) if (item.dataset.slug === slug) item.dataset.dirty = isComponentDirty(slug) ? '1' : null;
   }
+  // A "class" here is whatever the source's cva() literal held for this slot — often a single,
+  // very long, space-separated Tailwind utility string (a real shadcn base class routinely runs
+  // 300+ characters), not one short token. `.le-chip__label` truncates that text to a single line
+  // with an ellipsis so a long value can never grow the chip's box past its intrinsic line height
+  // and bleed into neighboring rows/labels; `title` always carries the untruncated text so it's
+  // still fully readable on hover regardless of length.
+  function chipEl(text, { warn = false, extraTitle = '', child } = {}) {
+    const title = extraTitle ? `${text}\n${extraTitle}` : text;
+    return el('span', { class: 'le-chip', 'data-warn': warn ? '1' : null, title },
+      el('span', { class: 'le-chip__label' }, text),
+      child ?? null);
+  }
   function renderChipList(classes, { onRemove, onAdd }) {
     ensureVocabDatalist();
     const box = el('div', { class: 'le-chips' });
     for (const cls of classes) {
       const known = state.vocabulary.includes(cls);
-      box.append(el('span', { class: 'le-chip', 'data-warn': known ? null : '1', title: known ? '' : 'Not in the known class vocabulary — still allowed' },
-        cls,
-        el('button', { type: 'button', class: 'le-chip__x', 'aria-label': `Remove ${cls}`, onclick: () => onRemove(cls) }, '×')));
+      box.append(chipEl(cls, {
+        warn: !known,
+        extraTitle: known ? '' : 'Not in the known class vocabulary — still allowed',
+        child: el('button', { type: 'button', class: 'le-chip__x', 'aria-label': `Remove ${cls}`, onclick: () => onRemove(cls) }, '×'),
+      }));
     }
     const add = el('input', { type: 'text', class: 'le-in le-in--sm', placeholder: '+ class ⏎', list: 'le-vocab', spellcheck: 'false' });
     add.addEventListener('keydown', (e) => {
@@ -409,7 +423,7 @@
       el('p', { class: 'le-hint' }, 'Shown for reference; edit the values above or the source file directly.'));
     for (const cv of spec.compoundVariants) {
       const when = Object.entries(cv.match).map(([k, v]) => `${k}=${v}`).join(' & ');
-      section.append(el('div', { class: 'le-compound-row' }, el('code', {}, when), el('div', { class: 'le-chips' }, ...cv.classes.map((c) => el('span', { class: 'le-chip' }, c)))));
+      section.append(el('div', { class: 'le-compound-row' }, el('code', {}, when), el('div', { class: 'le-chips' }, ...cv.classes.map((c) => chipEl(c)))));
     }
     return section;
   }

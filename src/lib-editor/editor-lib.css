@@ -125,11 +125,19 @@ button { font: inherit; }
 .le-comp-meta code { font-size: 11px; color: var(--le-fg-muted); background: var(--le-bg-subtle); padding: 2px 6px; border-radius: 4px; }
 .le-muted { color: var(--le-fg-subtle); font-size: 11px; }
 
-.le-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-.le-chip { display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 3px 0 8px; border-radius: 999px; border: 1px solid var(--le-border-default); background: var(--le-bg-subtle); font-family: var(--le-font-mono); font-size: 11px; }
+/* Rows wrap by chip, never by glyph: each chip is a bounded, single-line pill (see .le-chip__label)
+   so a very long token (a real shadcn base class routinely runs 300+ characters — one chip, not one
+   word) truncates instead of wrapping into a tall multi-line pill that bleeds into the row below.
+   No fixed row/chip height anywhere here — every box is sized by its own padding + line-height, so
+   short and long chips alike sit at a single, content-driven height with no overlap. */
+.le-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.le-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 4px 3px 8px; border-radius: 999px; border: 1px solid var(--le-border-default); background: var(--le-bg-subtle); font-family: var(--le-font-mono); font-size: 11px; line-height: 1.5; }
 .le-chip[data-warn="1"] { border-color: #e2ab48; background: #fdf3e2; color: #6b4700; }
 @media (prefers-color-scheme: dark) { .le-chip[data-warn="1"] { background: #332a15; color: #f0c876; border-color: #6b4700; } }
-.le-chip__x { font: inherit; border: 0; background: none; color: var(--le-fg-subtle); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
+/* Truncates to one line at a fixed cap regardless of viewport — full text always still reaches the
+   user via the chip's `title` tooltip (set in editor-lib.js), never only via this visible label. */
+.le-chip__label { flex: 0 1 auto; min-width: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.le-chip__x { flex: 0 0 auto; font: inherit; border: 0; background: none; color: var(--le-fg-subtle); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
 .le-chip__x:hover { color: var(--le-fg-danger); }
 
 .le-axis-table { display: flex; flex-direction: column; gap: 8px; }

@@ -114,17 +114,37 @@ function exampleMarkup(info: ComponentInfo, example: RenderExample): string {
   return `<figure class="cn-lib-example" data-title="${escapeHtml(example.title)}"><figcaption>${escapeHtml(example.title)}</figcaption>${openTag}${body}</figure>`;
 }
 
-/** One `<section data-slug>` per component: its examples, and — when read-only — a note why. */
+/**
+ * The body for a component with no `cva()` to preview: a single muted line, never the old bare
+ * `<Tag>…</Tag>` fallback. That fallback rendered with zero classes (nothing but `className`, which
+ * a generic example never sets) and, for a component with no per-slug render template, literally
+ * duplicated the component's own name (its example's title defaults to `exportName`) right under an
+ * `<h2>` already showing that same name, above a lone "…" placeholder — e.g. a whole "Accordion"
+ * section reading "Accordion" / "Accordion" / "…". None of that is a real preview of styling
+ * (there isn't any to show), so it's replaced with one line: the parse failure reason when `cva()`
+ * exists but couldn't be read, or a fixed explanatory note when the component simply has none.
+ */
+function noVariantsBody(info: ComponentInfo): string {
+  if (info.readOnlyReason) {
+    return `<p class="cn-lib-readonly" data-readonly-reason="${escapeHtml(info.readOnlyReason)}">Read-only: ${escapeHtml(info.readOnlyReason)}</p>`;
+  }
+  return `<p class="cn-lib-placeholder">no styled variants — behavior component</p>`;
+}
+
+/**
+ * One `<section data-slug>` per component: its real per-variant examples when `cva()` gives it
+ * something to show (Alert/Badge/Button-style components), or the single muted placeholder line
+ * from `noVariantsBody` otherwise — a component with no `cva()` has no styled variants to preview
+ * either way, whether that's because it never had one or because its `cva()` didn't parse.
+ */
 function componentSection(entry: { info: ComponentInfo; examples: RenderExample[] }): string {
   const { info, examples } = entry;
-  const readOnlyNote = info.readOnlyReason
-    ? `<p class="cn-lib-readonly" data-readonly-reason="${escapeHtml(info.readOnlyReason)}">Read-only: ${escapeHtml(info.readOnlyReason)}</p>`
-    : '';
-  const examplesHtml = examples.map((example) => exampleMarkup(info, example)).join('\n');
+  const body = info.cva
+    ? `<div class="cn-lib-examples">${examples.map((example) => exampleMarkup(info, example)).join('\n')}</div>`
+    : noVariantsBody(info);
   return `<section data-slug="${escapeHtml(info.slug)}" class="cn-lib-component">
   <h2>${escapeHtml(info.exportName)}</h2>
-  ${readOnlyNote}
-  <div class="cn-lib-examples">${examplesHtml}</div>
+  ${body}
 </section>`;
 }
 
@@ -142,12 +162,71 @@ function varLines(theme: LibraryTheme, key: 'light' | 'dark'): string {
     .join('\n');
 }
 
+// Structural chrome — card borders, section headings, captions — for the preview document. Never
+// themed: it derives entirely from `currentColor` (via `color-mix`, so it works with a `background`/
+// `foreground` pair of ANY lightness — the whole point of this preview is showing the user's own
+// edited theme, not a Canon-branded look) rather than assuming any particular theme var beyond the
+// `background`/`foreground` pair the body itself is set from (falling back to a plain light theme
+// when even those are absent, e.g. in a test fixture that doesn't define them).
+const CHROME_BORDER = 'color-mix(in srgb, currentColor 14%, transparent)';
+const CHROME_MUTED = 'color-mix(in srgb, currentColor 55%, transparent)';
+
+const STRUCTURAL_CSS = `html, body { margin: 0; }
+body {
+  min-height: 100%;
+  background: var(--background, #fff);
+  color: var(--foreground, #111);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 24px;
+  display: grid;
+  gap: 20px;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.cn-lib-component {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  max-width: 100%;
+  border: 1px solid ${CHROME_BORDER};
+  border-radius: 12px;
+}
+.cn-lib-component > h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant: small-caps;
+  letter-spacing: .02em;
+  color: ${CHROME_MUTED};
+}
+.cn-lib-readonly, .cn-lib-placeholder { margin: 0; font-size: 12px; color: ${CHROME_MUTED}; }
+.cn-lib-examples {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  align-items: start;
+  gap: 14px;
+  max-width: 100%;
+}
+.cn-lib-example {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.cn-lib-example > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }`;
+
 /**
  * Build the complete library-mode preview HTML document: a raw `:root`/`.dark` block with the
  * theme's own CSS variables, a Tailwind v4 `@theme inline` bridge so utilities like `bg-primary`
  * resolve against those variables, the vendored @tailwindcss/browser runtime inlined so the whole
  * document compiles offline, and one `<section data-slug>` per component rendering its examples
- * with their real computed classes.
+ * with their real computed classes. Structural chrome (card borders, section headings, captions —
+ * `STRUCTURAL_CSS`) gives every section real layout regardless of what the target repo's own classes
+ * do; the canvas itself (`body`'s `background`/`color`) stays on the theme's own vars, since showing
+ * the user's actual edited theme — not a Canon-styled wrapper around it — is this preview's whole
+ * purpose.
  */
 export function previewHtml(theme: LibraryTheme, components: { info: ComponentInfo; examples: RenderExample[] }[]): string {
   const rootVars = varLines(theme, 'light');
@@ -174,6 +253,9 @@ ${themeBridge}
 ${rootVars}
 }
 ${darkVars ? `.dark {\n${darkVars}\n}` : ''}
+</style>
+<style>
+${STRUCTURAL_CSS}
 </style>
 <!-- canon:tailwind-runtime @tailwindcss/browser@${TAILWIND_RUNTIME_VERSION} -->
 <script>
