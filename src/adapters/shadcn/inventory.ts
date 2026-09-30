@@ -197,13 +197,19 @@ export function inventory(root: string): ComponentInfo[] {
  *
  * `stagedSource`, when given, is parsed/spliced INSTEAD OF re-reading `component.file` from disk —
  * see the `Adapter.writeVariants` docstring (types.ts) for why (same-file cva+parts composition).
- * The `cva()` span is always re-located inside whatever source is in play (disk or staged) via a
- * fresh `findCva`, never trusted from a prior parse.
+ * The realpath resolution and disk read are BOTH skipped in that case: `component.file` already
+ * came from a prior call earlier in the same staged chain (this call's own first link, or
+ * `inventory()` itself), which already canonicalized it — re-resolving it here would only cost a
+ * syscall, never change the answer. The `cva()` span is always re-located inside whatever source is
+ * in play (disk or staged) via a fresh `findCva`, never trusted from a prior parse.
  */
 export function writeVariants(component: ComponentInfo, spec: CvaSpec, stagedSource?: string): Write {
   validateSpec(spec, component.slug);
 
-  const file = realpathSync(component.file); // never trust the caller's path to already be canonical (see connect.ts, install.ts)
+  // never trust the caller's path to already be canonical on a fresh disk read (see connect.ts,
+  // install.ts) — but a staged buffer means this file was already canonicalized earlier in the
+  // same save's splice chain, so re-resolving it again here is unnecessary.
+  const file = stagedSource === undefined ? realpathSync(component.file) : component.file;
   const source = stagedSource ?? readFileSync(file, 'utf8');
   const span = findCva(source); // first cva() call only, same as inventory()
   if (!span) throw new Error(`shadcn adapter: "${component.slug}" no longer has a cva() call (${file})`);
@@ -254,14 +260,18 @@ function spansOverlap(a: { start: number; end: number }, b: { start: number; end
  * `stagedSource`, when given, is parsed/spliced INSTEAD OF re-reading `component.file` from disk —
  * see the `Adapter.writeVariants` docstring (types.ts) for why (same-file cva+parts composition,
  * and multiple parts in one file: a caller feeds each successive `writePart` call the PRIOR call's
- * returned `Write.content`). Every span below — the part's own and the file's `cva()` span used
- * for the overlap backstop — is re-located inside whatever source is in play, never trusted from a
- * precomputed value: a prior splice in this same save may already have moved them.
+ * returned `Write.content`). The realpath resolution and disk read are BOTH skipped in that case,
+ * same reasoning as `writeVariants`. Every span below — the part's own and the file's `cva()` span
+ * used for the overlap backstop — is re-located inside whatever source is in play, never trusted
+ * from a precomputed value: a prior splice in this same save may already have moved them.
  */
 export function writePart(component: ComponentInfo, partName: string, classes: string, stagedSource?: string): Write {
   validateClassList([classes], `"${component.slug}" part "${partName}"`);
 
-  const file = realpathSync(component.file); // never trust the caller's path to already be canonical (see connect.ts, install.ts)
+  // never trust the caller's path to already be canonical on a fresh disk read (see connect.ts,
+  // install.ts) — but a staged buffer means this file was already canonicalized earlier in the
+  // same save's splice chain, so re-resolving it again here is unnecessary.
+  const file = stagedSource === undefined ? realpathSync(component.file) : component.file;
   const source = stagedSource ?? readFileSync(file, 'utf8');
   const parts = parseParts(source); // re-parsed fresh, same as inventory() would today
   const part = parts.find((p) => p.name === partName);

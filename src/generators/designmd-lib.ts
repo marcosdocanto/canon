@@ -57,16 +57,27 @@ function defaultsSummary(c: ComponentInfo): string {
   return defaults.join(', ') || '—';
 }
 
-/** slug, import path, variant axes and values, defaults, read-only reasons. */
+// Same interpolation caveat as `variantSummary` above: a part's name and classes are only ever
+// reached here after the write path (`writePart` / `validateClassList`) already refused an unsafe
+// class string, and a part's `name` always comes from `parseParts`'s PascalCase export scan — never
+// user-supplied free text — so neither needs re-guarding for this table.
+function partsSummary(c: ComponentInfo): string {
+  const styled = (c.parts ?? []).filter((part) => part.classes !== undefined);
+  if (!styled.length) return '—';
+  return styled.map((part) => `${part.name}: ${code(part.classes!)}`).join('; ');
+}
+
+/** slug, import path, variant axes and values, defaults, editable parts' classes, read-only reasons. */
 function componentTable(components: ComponentInfo[]): string {
   const rows = components.map((c) => [
     code(c.slug),
     code(c.importPath),
     variantSummary(c),
     defaultsSummary(c),
+    partsSummary(c),
     c.readOnlyReason ? `read-only: ${c.readOnlyReason}` : '—',
   ]);
-  return table(['component', 'import', 'variants', 'defaults', 'notes'], rows);
+  return table(['component', 'import', 'variants', 'defaults', 'parts', 'notes'], rows);
 }
 
 export function designMdLib(system: System, theme: LibraryTheme, components: ComponentInfo[], describeVar: DescribeVar): string {
@@ -83,7 +94,7 @@ export function designMdLib(system: System, theme: LibraryTheme, components: Com
   out.push(`## 3. Ownership`);
   out.push(OWNERSHIP_RULE);
   out.push(`## 4. Components`);
-  out.push(`Import each component from the path in the table below — never recreate one Canon already tracks here. A "read-only" note names why Canon couldn't parse that component's style block; the component still works, but its variants can only be edited by hand until the block is simplified back into the supported grammar (then Canon picks it back up on the next build).`);
+  out.push(`Import each component from the path in the table below — never recreate one Canon already tracks here. The "parts" column lists each editable exported subcomponent's own static className (a "part") alongside its current classes; a subcomponent with no styled part, or whose className is dynamic, is omitted from it. A "read-only" note names why Canon couldn't parse that component's style block; the component still works, but its variants can only be edited by hand until the block is simplified back into the supported grammar (then Canon picks it back up on the next build).`);
   out.push(componentTable(components));
   out.push(`## 5. Verification`);
   out.push(`Run ${code('canon lint')} and ${code('canon check')} after any change touching these components or the theme file.`);

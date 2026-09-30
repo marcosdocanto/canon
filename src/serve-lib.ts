@@ -369,6 +369,7 @@ async function handleSave(req: IncomingMessage, res: ServerResponse, root: strin
     const touchedSlugs = new Set<string>([...Object.keys(body.components ?? {}), ...Object.keys(body.parts ?? {})]);
     for (const slug of touchedSlugs) {
       const info = infoBySlug.get(slug)!;
+      const componentIndex = nextComponents.findIndex((c) => c.slug === slug);
       let staged: string | undefined;
       let write: Write | undefined;
 
@@ -377,15 +378,33 @@ async function handleSave(req: IncomingMessage, res: ServerResponse, root: strin
         try { write = adapter.writeVariants(info, spec); }
         catch (error) { json(res, 422, { slug, message: (error as Error).message }); return; }
         staged = write.content.toString('utf8');
-        nextComponents[nextComponents.findIndex((c) => c.slug === slug)] = { ...info, cva: spec, readOnlyReason: undefined };
+        nextComponents[componentIndex] = { ...nextComponents[componentIndex], cva: spec, readOnlyReason: undefined };
       }
 
       if (body.parts && slug in body.parts) {
-        for (const [partName, classes] of Object.entries(body.parts[slug])) {
+        const partEdits = body.parts[slug];
+        // Sorted by name: a deterministic splice order, independent of the request body's own JSON
+        // key order — harmless to correctness either way (every call re-parses and re-locates its
+        // own span fresh against the PRIOR call's staged content, so two different parts' disjoint
+        // literals splice to the same final bytes regardless of order), but sorted keeps the byte-level
+        // result reproducible across equivalent requests, matching `writeVariants`'s own determinism.
+        for (const partName of Object.keys(partEdits).sort()) {
+          const classes = partEdits[partName];
           try { write = adapter.writePart(info, partName, classes, staged); }
           catch (error) { json(res, 422, { slug, partName, message: (error as Error).message }); return; }
           staged = write.content.toString('utf8');
         }
+        // Fold the just-applied classes into `nextComponents` too — not just the file `Write` — so
+        // `buildLibWrites` below (fed `nextComponents`, not a fresh `adapter.inventory` re-read)
+        // documents the about-to-commit part classes in DESIGN.md/stories/preview, the same way the
+        // `components` branch above already does for `cva`. Only `classes` changes; a part's `span`
+        // is left as-is (stale post-splice byte offsets) since nothing downstream of `nextComponents`
+        // reads it — `publicComponent`/`publicPart` (the actual save response) always re-reads fresh
+        // state off disk instead, where spans are correctly re-parsed.
+        nextComponents[componentIndex] = {
+          ...nextComponents[componentIndex],
+          parts: nextComponents[componentIndex].parts?.map((part) => (part.name in partEdits ? { ...part, classes: partEdits[part.name] } : part)),
+        };
       }
 
       // `write` is undefined only when this slug's own `parts` entry was an empty object (`{}`) and

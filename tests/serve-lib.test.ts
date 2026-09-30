@@ -407,6 +407,12 @@ test('POST /api/lib/save applies a part edit (dialog, no cva at all), byte-ident
 
   assert.equal(body.hashes[dialogFile], sha256(dialogFile));
   assert.notEqual(body.hashes[dialogFile], state.hashes[dialogFile]);
+
+  // Dist regenerated to describe the state just committed, not the pre-save one — the same
+  // `nextComponents` override mechanism the cva save test above pins for DESIGN.md's theme table,
+  // now also covering a part's classes (componentTable's "parts" column, designmd-lib.ts).
+  const designMd = readFileSync(join(f.design, 'dist', 'DESIGN.md'), 'utf8');
+  assert.ok(designMd.includes(newClasses), 'DESIGN.md documents the just-saved part classes, not the stale pre-save ones');
 });
 
 test('POST /api/lib/save composes a cva edit and a part edit to the SAME file in one transaction', async (t) => {
