@@ -1,9 +1,10 @@
-// shadcn/ui theme reading: CSS custom properties in :root / .dark blocks.
+// shadcn/ui theme reading and writing: CSS custom properties in :root / .dark blocks.
 import { existsSync, readFileSync } from 'node:fs';
+import type { Write } from '../../design-files.ts';
 import type { LibraryTheme } from '../types.ts';
 import { readConfig } from './config.ts';
 
-interface CssBlock { selector: string; body: string; }
+interface CssBlock { selector: string; body: string; bodyStart: number; bodyEnd: number; }
 
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -51,7 +52,7 @@ function topLevelBlocks(css: string): CssBlock[] {
         j++;
       }
       const bodyEnd = j - 1; // position of the matching '}'
-      blocks.push({ selector, body: css.slice(i + 1, bodyEnd) });
+      blocks.push({ selector, body: css.slice(i + 1, bodyEnd), bodyStart: i + 1, bodyEnd });
       i = j;
       selectorStart = i;
       continue;
@@ -63,6 +64,20 @@ function topLevelBlocks(css: string): CssBlock[] {
 
 const VAR_DECL = /--([A-Za-z0-9-]+)\s*:\s*([^;]+);/g;
 
+type ManagedKind = 'root' | 'dark';
+
+/**
+ * Classify a top-level selector as the managed light (`:root`) or dark (`.dark`, `:root.dark`,
+ * `.dark:root`, …) theme block, or `undefined` when it isn't one (including any `@`-rule, which
+ * is never managed).
+ */
+function managedKind(selector: string): ManagedKind | undefined {
+  if (selector.startsWith('@')) return undefined;
+  if (selector === ':root') return 'root';
+  if (selector.includes('.dark')) return 'dark';
+  return undefined;
+}
+
 /**
  * Scan CSS text for `:root` and `.dark` (also `:root.dark`, `.dark:root`) selector blocks and
  * collect their `--var: value;` declarations. Blocks whose selector starts with `@` (e.g.
@@ -72,14 +87,30 @@ export function parseVarBlocks(css: string): { root: Map<string, string>; dark: 
   const root = new Map<string, string>();
   const dark = new Map<string, string>();
   for (const block of topLevelBlocks(css)) {
-    if (block.selector.startsWith('@')) continue;
-    const target = block.selector === ':root' ? root : block.selector.includes('.dark') ? dark : undefined;
-    if (!target) continue;
+    const kind = managedKind(block.selector);
+    if (!kind) continue;
+    const target = kind === 'root' ? root : dark;
     VAR_DECL.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = VAR_DECL.exec(block.body))) target.set(match[1], match[2].trim());
   }
   return { root, dark };
+}
+
+interface VarPosition { name: string; valueStart: number; valueEnd: number; }
+
+/** Locate each `--name: value;` declaration in `body`, with the value's char offsets within `body`. */
+function findVarPositions(body: string): VarPosition[] {
+  const positions: VarPosition[] = [];
+  const prefixRe = /^--[A-Za-z0-9-]+\s*:\s*/;
+  VAR_DECL.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = VAR_DECL.exec(body))) {
+    const prefix = prefixRe.exec(body.slice(match.index))![0];
+    const valueStart = match.index + prefix.length;
+    positions.push({ name: match[1], valueStart, valueEnd: valueStart + match[2].length });
+  }
+  return positions;
 }
 
 /**
@@ -104,4 +135,59 @@ export function readTheme(root: string): LibraryTheme {
     if (!(name in vars)) vars[name] = { light: value, dark: value };
   }
   return { file: cssFile, vars };
+}
+
+/** The indentation used by the block's existing declarations, or a two-space default. */
+function blockIndent(body: string): string {
+  return /\n([ \t]*)--/.exec(body)?.[1] ?? '  ';
+}
+
+/**
+ * Write a theme back to its shadcn CSS file, touching only the managed `:root`/`.dark` blocks and,
+ * within them, only the `--name: value;` lines for vars present in `theme.vars` (light values into
+ * `:root`, dark values into `.dark`). Everything else — comments, imports, other rules, unmanaged
+ * vars — is preserved byte-for-byte: the file is re-scanned with the same block scanner used by
+ * `readTheme`, and the new content is built by splicing spans, never by re-serializing.
+ */
+export function writeTheme(root: string, theme: LibraryTheme): Write[] {
+  const { file } = theme;
+  if (!existsSync(file)) throw new Error(`shadcn adapter: css file not found: ${file}`);
+  const css = readFileSync(file, 'utf8');
+
+  const spans: { start: number; end: number; text: string }[] = [];
+  for (const block of topLevelBlocks(css)) {
+    const kind = managedKind(block.selector);
+    if (!kind) continue;
+
+    const positions = findVarPositions(block.body);
+    const present = new Set(positions.map((p) => p.name));
+    for (const { name, valueStart, valueEnd } of positions) {
+      const value = theme.vars[name];
+      if (!value) continue;
+      const next = kind === 'root' ? value.light : value.dark;
+      if (next === undefined) continue;
+      spans.push({ start: block.bodyStart + valueStart, end: block.bodyStart + valueEnd, text: next });
+    }
+
+    const indent = blockIndent(block.body);
+    let appended = '';
+    for (const [name, value] of Object.entries(theme.vars)) {
+      if (present.has(name)) continue;
+      const next = kind === 'root' ? value.light : value.dark;
+      if (next === undefined) continue;
+      appended += `${indent}--${name}: ${next};\n`;
+    }
+    if (appended) spans.push({ start: block.bodyEnd, end: block.bodyEnd, text: appended });
+  }
+  spans.sort((a, b) => a.start - b.start);
+
+  let out = '';
+  let cursor = 0;
+  for (const span of spans) {
+    out += css.slice(cursor, span.start) + span.text;
+    cursor = span.end;
+  }
+  out += css.slice(cursor);
+
+  return [{ root, path: file, content: Buffer.from(out, 'utf8') }];
 }
