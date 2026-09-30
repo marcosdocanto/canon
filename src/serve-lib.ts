@@ -176,6 +176,10 @@ function readState(root: string, adapter: Adapter) {
 export function libHandler(root: string, adapterId: string, designDir: string): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const adapter = getAdapter(adapterId);
   const editorRoot = realpathSync(LIB_EDITOR_ROOT);
+  // Mirrors native Studio's own `saving` flag (serve.ts's `/api/save`): a single in-flight save at
+  // a time. Without it, two concurrent `POST /api/lib/save` could both pass the hash check below,
+  // then interleave across the `await buildLibWrites(...)` yield — last write wins, silently.
+  const saveLock = { saving: false };
 
   return async (req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
@@ -201,7 +205,7 @@ export function libHandler(root: string, adapterId: string, designDir: string): 
 
       if (url === '/api/lib/save') {
         if (req.method !== 'POST') throw new HttpError(405, 'Use POST for /api/lib/save');
-        await handleSave(req, res, root, designDir, adapter);
+        await handleSave(req, res, root, designDir, adapter, saveLock);
         return;
       }
 
@@ -212,6 +216,11 @@ export function libHandler(root: string, adapterId: string, designDir: string): 
 
 /**
  * `POST /api/lib/save`: the transactional library-studio save. Order, matching the brief:
+ *   0. Refuse a second save while one is already in flight: a 409 naming the conflict, checked and
+ *      set right after the body is parsed (before anything reads current disk state) and cleared in
+ *      a `finally` so a throw anywhere below never leaves the lock stuck — the exact `saving`-flag
+ *      shape native Studio's own `/api/save` (serve.ts) uses, guarding the same
+ *      read-current-state-then-write shape of race.
  *   1. Shape-validate the body (unknown top-level field → 400) and every slug named in `components`
  *      against the CURRENT inventory (unknown or read-only → 422, naming the slug).
  *   2. Every file this save will touch (the theme file, when `theme` is present; each named
@@ -233,70 +242,82 @@ export function libHandler(root: string, adapterId: string, designDir: string): 
  *      reported as a 200 with `stateError` set, never a 500 (which would look like the save itself
  *      failed and invite a client retry that re-sends writes already on disk).
  */
-async function handleSave(req: IncomingMessage, res: ServerResponse, root: string, designDir: string, adapter: Adapter): Promise<void> {
+async function handleSave(req: IncomingMessage, res: ServerResponse, root: string, designDir: string, adapter: Adapter, lock: { saving: boolean }): Promise<void> {
   const body = saveBody(await readBody(req));
-  const currentTheme = adapter.readTheme(root);
-  const currentComponents = adapter.inventory(root);
-  const infoBySlug = new Map(currentComponents.map((c) => [c.slug, c]));
 
-  if (body.theme) requireValue(body.theme.file === currentTheme.file, `theme.file must be this project's current theme file (${currentTheme.file})`);
-
-  for (const slug of Object.keys(body.components ?? {})) {
-    const info = infoBySlug.get(slug);
-    if (!info) { json(res, 422, { slug, message: `unknown component slug: ${slug}` }); return; }
-    if (!info.cva) { json(res, 422, { slug, message: info.readOnlyReason ? `read-only: ${info.readOnlyReason}` : `${slug} is read-only` }); return; }
-  }
-
-  const touched = new Set<string>();
-  if (body.theme) touched.add(currentTheme.file);
-  for (const slug of Object.keys(body.components ?? {})) touched.add(infoBySlug.get(slug)!.file);
-  for (const file of touched) requireValue(file in body.hashes, `Missing hash for ${file}: every file this save touches must be covered by "hashes"`);
-
-  // Every key in `hashes` must be a path this Studio would itself have handed out in `GET
-  // /api/lib/state` — the theme file or an inventoried component's own file with a cva() (see
-  // `stateHashes`). Without this check, `hashes` is an attacker-controlled map of arbitrary strings
-  // read straight into `sha256File` -> `readFileSync`: a bogus path could hang the process reading a
-  // FIFO, or leak whether some arbitrary filesystem path exists/is readable via the response's
-  // status code. A 400 here, before any hash is computed, closes that off.
-  const knownFiles = new Set<string>([currentTheme.file, ...currentComponents.filter((c) => c.cva).map((c) => c.file)]);
-  for (const file of Object.keys(body.hashes)) requireValue(knownFiles.has(file), `Unknown path in hashes: ${file}`);
-
-  for (const [file, expected] of Object.entries(body.hashes)) {
-    let actual: string;
-    try { actual = sha256File(file); }
-    catch { json(res, 409, { file }); return; } // vanished/unreadable since the client last read state: a conflict, not a crash
-    if (actual !== expected) { json(res, 409, { file }); return; }
-  }
-
-  // Nothing above touches disk. From here, every Write is staged in memory; the single
-  // `installFiles` call below is the only place any of it is actually applied.
-  const writes: Write[] = [];
-  if (body.theme) {
-    try { writes.push(...adapter.writeTheme(root, body.theme)); }
-    catch (error) { json(res, 422, { field: 'theme', message: (error as Error).message }); return; } // e.g. a var name/value the CSS-injection guard rejects
-  }
-
-  const nextComponents = currentComponents.slice();
-  for (const [slug, spec] of Object.entries(body.components ?? {})) {
-    const info = infoBySlug.get(slug)!;
-    let write: Write;
-    try { write = adapter.writeVariants(info, spec); }
-    catch (error) { json(res, 422, { slug, message: (error as Error).message }); return; }
-    writes.push(write);
-    nextComponents[nextComponents.findIndex((c) => c.slug === slug)] = { ...info, cva: spec, readOnlyReason: undefined };
-  }
-
-  writes.push(...await buildLibWrites(root, designDir, { theme: body.theme ?? currentTheme, components: nextComponents }));
-
-  installFiles(root, writes);
-  // The save already committed at this point — installFiles either applied every write or rolled
-  // all of them back, atomically. Re-reading fresh state off disk is a courtesy for the response
-  // body, not part of the transaction: if it throws (e.g. a raced external change to the theme file
-  // or a component between the commit above and this read), that must never be reported as the save
-  // itself failing (a 500 the client would reasonably retry, re-sending writes that already landed).
+  // Everything from here on reads "current" disk/inventory state and later commits writes built
+  // from it — exactly the read-then-write shape a second concurrent save could race. Refuse it
+  // outright rather than let it interleave (see the docstring above and native Studio's own
+  // `saving` flag in serve.ts's `/api/save`); always cleared, even if a check below throws or a 422
+  // return happens mid-validation.
+  if (lock.saving) throw new HttpError(409, 'A save is already in progress; retry when it finishes');
+  lock.saving = true;
   try {
-    json(res, 200, readState(root, adapter));
-  } catch (error) {
-    json(res, 200, { saved: true, stateError: (error as Error).message });
+    const currentTheme = adapter.readTheme(root);
+    const currentComponents = adapter.inventory(root);
+    const infoBySlug = new Map(currentComponents.map((c) => [c.slug, c]));
+
+    if (body.theme) requireValue(body.theme.file === currentTheme.file, `theme.file must be this project's current theme file (${currentTheme.file})`);
+
+    for (const slug of Object.keys(body.components ?? {})) {
+      const info = infoBySlug.get(slug);
+      if (!info) { json(res, 422, { slug, message: `unknown component slug: ${slug}` }); return; }
+      if (!info.cva) { json(res, 422, { slug, message: info.readOnlyReason ? `read-only: ${info.readOnlyReason}` : `${slug} is read-only` }); return; }
+    }
+
+    const touched = new Set<string>();
+    if (body.theme) touched.add(currentTheme.file);
+    for (const slug of Object.keys(body.components ?? {})) touched.add(infoBySlug.get(slug)!.file);
+    for (const file of touched) requireValue(file in body.hashes, `Missing hash for ${file}: every file this save touches must be covered by "hashes"`);
+
+    // Every key in `hashes` must be a path this Studio would itself have handed out in `GET
+    // /api/lib/state` — the theme file or an inventoried component's own file with a cva() (see
+    // `stateHashes`). Without this check, `hashes` is an attacker-controlled map of arbitrary strings
+    // read straight into `sha256File` -> `readFileSync`: a bogus path could hang the process reading a
+    // FIFO, or leak whether some arbitrary filesystem path exists/is readable via the response's
+    // status code. A 400 here, before any hash is computed, closes that off.
+    const knownFiles = new Set<string>([currentTheme.file, ...currentComponents.filter((c) => c.cva).map((c) => c.file)]);
+    for (const file of Object.keys(body.hashes)) requireValue(knownFiles.has(file), `Unknown path in hashes: ${file}`);
+
+    for (const [file, expected] of Object.entries(body.hashes)) {
+      let actual: string;
+      try { actual = sha256File(file); }
+      catch { json(res, 409, { file }); return; } // vanished/unreadable since the client last read state: a conflict, not a crash
+      if (actual !== expected) { json(res, 409, { file }); return; }
+    }
+
+    // Nothing above touches disk. From here, every Write is staged in memory; the single
+    // `installFiles` call below is the only place any of it is actually applied.
+    const writes: Write[] = [];
+    if (body.theme) {
+      try { writes.push(...adapter.writeTheme(root, body.theme)); }
+      catch (error) { json(res, 422, { field: 'theme', message: (error as Error).message }); return; } // e.g. a var name/value the CSS-injection guard rejects
+    }
+
+    const nextComponents = currentComponents.slice();
+    for (const [slug, spec] of Object.entries(body.components ?? {})) {
+      const info = infoBySlug.get(slug)!;
+      let write: Write;
+      try { write = adapter.writeVariants(info, spec); }
+      catch (error) { json(res, 422, { slug, message: (error as Error).message }); return; }
+      writes.push(write);
+      nextComponents[nextComponents.findIndex((c) => c.slug === slug)] = { ...info, cva: spec, readOnlyReason: undefined };
+    }
+
+    writes.push(...await buildLibWrites(root, designDir, { theme: body.theme ?? currentTheme, components: nextComponents }));
+
+    installFiles(root, writes);
+    // The save already committed at this point — installFiles either applied every write or rolled
+    // all of them back, atomically. Re-reading fresh state off disk is a courtesy for the response
+    // body, not part of the transaction: if it throws (e.g. a raced external change to the theme file
+    // or a component between the commit above and this read), that must never be reported as the save
+    // itself failing (a 500 the client would reasonably retry, re-sending writes that already landed).
+    try {
+      json(res, 200, readState(root, adapter));
+    } catch (error) {
+      json(res, 200, { saved: true, stateError: (error as Error).message });
+    }
+  } finally {
+    lock.saving = false;
   }
 }

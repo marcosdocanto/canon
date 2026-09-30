@@ -5,8 +5,9 @@
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { once, EventEmitter } from 'node:events';
 import { request as httpRequest } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,8 @@ import { createHash } from 'node:crypto';
 import { adopt } from '../src/adopt.ts';
 import { createSystem, writeDesignDir } from '../src/system.ts';
 import { buildSystem } from '../src/build.ts';
+import { libHandler } from '../src/serve-lib.ts';
+import { findProject } from '../src/project.ts';
 import { clone } from './fixtures/clone.ts';
 
 function sha256(path: string): string {
@@ -97,6 +100,53 @@ async function libFixture(t: TestContext, opts: { v3?: boolean } = {}) {
   const dist = join(design, 'dist');
   const { request } = await bootServe(t, dist, design, root);
   return { root, design, dist, request };
+}
+
+/**
+ * A minimal `IncomingMessage`/`ServerResponse` stand-in for driving `libHandler`'s returned
+ * request listener directly, in-process — used only by the save-mutex test below. Real concurrent
+ * sockets DO exercise the save-lock guard, but whether two independent connections' bytes actually
+ * land in the same Node microtask window is a timing accident (flaky at best, since `handleSave`'s
+ * only genuine yield around the critical section is a same-tick microtask, not real I/O). Driving
+ * two calls to the same in-process handler lets the test resolve both requests' bodies before
+ * either's continuation runs, which deterministically reproduces the interleave the lock guards
+ * against: same request-handling code path, same validation, same lock object, no network timing.
+ */
+function mockReq(opts: { method: string; url: string; body?: string; port?: number }): IncomingMessage {
+  const port = opts.port ?? 4600;
+  const headers: Record<string, string> = { host: `127.0.0.1:${port}` };
+  if (opts.body !== undefined) {
+    headers['content-type'] = 'application/json';
+    headers['content-length'] = String(Buffer.byteLength(opts.body));
+  }
+  const req = new EventEmitter() as unknown as IncomingMessage;
+  Object.assign(req, {
+    method: opts.method,
+    url: opts.url,
+    headers,
+    rawHeaders: Object.entries(headers).flatMap(([name, value]) => [name, value]),
+    socket: { localPort: port },
+    complete: true,
+    resume() { return req; },
+  });
+  return req;
+}
+
+function mockRes(): { res: ServerResponse; done: Promise<{ status: number; text: string }> } {
+  let settle!: (result: { status: number; text: string }) => void;
+  const done = new Promise<{ status: number; text: string }>((resolve) => { settle = resolve; });
+  let status = 0;
+  const chunks: Buffer[] = [];
+  const res = {
+    destroyed: false,
+    setHeader() {},
+    writeHead(code: number) { status = code; },
+    end(content?: unknown) {
+      if (content !== undefined) chunks.push(Buffer.isBuffer(content) ? content : Buffer.from(String(content)));
+      settle({ status, text: Buffer.concat(chunks).toString('utf8') });
+    },
+  } as unknown as ServerResponse;
+  return { res, done };
 }
 
 test('GET /api/lib/state returns the theme, component inventory (button cva, badge read-only) and file hashes', async (t) => {
@@ -253,6 +303,61 @@ test('POST /api/lib/save writes theme + variant changes in one atomic transactio
   const designMd = readFileSync(join(f.design, 'dist', 'DESIGN.md'), 'utf8');
   assert.match(designMd, /#123456/);
   assert.match(designMd, /#abcdef/);
+});
+
+test('POST /api/lib/save serializes concurrent saves: the second gets 409 "already in progress", first wins, second never writes', async (t) => {
+  // In-process, not the spawned-child-process `libFixture` — see mockReq/mockRes above for why.
+  const root = clone(t);
+  await adopt({ root, apply: true, hooks: false });
+  const design = join(root, 'design');
+  const project = findProject(root);
+  assert.ok(project?.adapter, 'fixture must adopt into an adapter-mode project');
+  const handler = libHandler(root, project!.adapter!, design);
+
+  const stateReq = mockReq({ method: 'GET', url: '/api/lib/state' });
+  const stateRes = mockRes();
+  await handler(stateReq, stateRes.res);
+  const state = JSON.parse((await stateRes.done).text);
+
+  const themeFile = join(root, 'app', 'globals.css');
+  const buttonFile = join(root, 'src', 'ui', 'button.tsx');
+  const button = state.components.find((c: any) => c.slug === 'button');
+
+  const draftTheme = { ...state.theme, vars: { ...state.theme.vars, primary: { light: '#111111', dark: '#222222' } } };
+  const bodyA = JSON.stringify({ theme: draftTheme, hashes: state.hashes });
+
+  const draftButton = JSON.parse(JSON.stringify(button.cva));
+  draftButton.variants.size.sm = ['h-8', 'rounded-md', 'px-5', 'text-xs'];
+  const bodyB = JSON.stringify({ components: { button: draftButton }, hashes: state.hashes });
+
+  const reqA = mockReq({ method: 'POST', url: '/api/lib/save', body: bodyA });
+  const resA = mockRes();
+  const reqB = mockReq({ method: 'POST', url: '/api/lib/save', body: bodyB });
+  const resB = mockRes();
+
+  // Start both requests — each suspends at its own `await readBody(req)`, having done nothing else
+  // yet (no disk reads, no lock check). Then resolve A's body before B's, synchronously and back to
+  // back: this queues A's post-body continuation ahead of B's on the microtask queue. A's
+  // continuation runs first, sets the save lock, and itself suspends at `await buildLibWrites(...)`
+  // — only then does B's (already-queued) continuation run and observe the lock held, deterministically
+  // exercising the busy-response path instead of racing real socket timing.
+  const pA = handler(reqA, resA.res);
+  const pB = handler(reqB, resB.res);
+  reqA.emit('data', Buffer.from(bodyA));
+  reqA.emit('end');
+  reqB.emit('data', Buffer.from(bodyB));
+  reqB.emit('end');
+  await Promise.all([pA, pB]);
+
+  const [resultA, resultB] = await Promise.all([resA.done, resB.done]);
+  assert.equal(resultA.status, 200, 'the first save proceeds');
+  assert.equal(resultB.status, 409, 'the second save is refused while the first is in flight');
+  const busy = JSON.parse(resultB.text);
+  assert.equal(busy.ok, false);
+  assert.match(busy.error, /already in progress/);
+
+  assert.match(readFileSync(themeFile, 'utf8'), /--primary:\s*#111111;/, "A's theme change landed");
+  assert.ok(!readFileSync(buttonFile, 'utf8').includes('px-5'), "B's rejected variant change never touched disk");
 });
 
 test('POST /api/lib/save refuses on a conflicting hash: names the stale file, writes nothing', async (t) => {

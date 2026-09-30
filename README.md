@@ -46,7 +46,7 @@ Screen layout, routes and application behavior remain agent work; Save does not 
 
 ## Library studio
 
-To use Canon styling with an existing component library, run `canon init --lib <template>` or `canon adopt` to adopt an existing library. Canon applies its styling on top of your components; in library mode, `canon studio` opens the library editor instead.
+To use Canon styling with an existing component library, run `canon init <name> --lib shadcn [--preset <preset>]` or `canon adopt` to adopt an existing library. Canon applies its styling on top of your components; in library mode, `canon studio` opens the library editor instead.
 
 The library editor has two tabs: **Theme** to define CSS variables with light and dark mode support, previewed against your repo's real component classes, and **Components** to edit CVA variant definitions for Canon-owned components (add or remove values, set defaults, adjust class lists); read-only components show why they cannot be edited.
 
