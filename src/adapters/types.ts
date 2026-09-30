@@ -26,17 +26,28 @@ export interface Adapter {
   readTheme(root: string): LibraryTheme;
   writeTheme(root: string, theme: LibraryTheme): Write[];
   inventory(root: string): ComponentInfo[];
-  writeVariants(component: ComponentInfo, spec: CvaSpec): Write;
+  /**
+   * `source`, when given, is a staged in-memory buffer to parse/splice INSTEAD OF re-reading
+   * `component.file` from disk — the same file's `cva()` span is re-located inside it fresh, never
+   * assumed to still sit at `component.cvaSpan`. This is how a save composes a cva edit with one or
+   * more part edits to the SAME file into one final buffer: the caller (serve-lib.ts's save
+   * endpoint) feeds each successive adapter call the PRIOR call's returned `Write.content`, so
+   * offsets are always re-derived from the actual bytes about to be spliced, never from a stale
+   * pre-save span. Omitted (the common case — no other edit to this file in this save), it reads
+   * the file fresh, exactly as before.
+   */
+  writeVariants(component: ComponentInfo, spec: CvaSpec, source?: string): Write;
   /**
    * Splice an edited class string into one of `component`'s "parts" (an exported subcomponent's
    * own static `className` literal — see `ComponentInfo.parts` / `PartInfo`), returning the file
    * `Write` — not yet applied; pass to `installFiles`. Re-reads and re-parses the component's file
-   * fresh rather than trusting a possibly-stale `parts` array, and throws, naming `component.slug`
-   * and `partName`, when the part doesn't exist or is read-only (`PartInfo.readOnlyReason`), or
-   * when `classes` fails the adapter's safe class-token grammar (no quotes, backtick, braces or
-   * backslash) — in every failure case, nothing is written to disk.
+   * fresh (or re-parses `source`, when given — see `writeVariants`'s docstring on why) rather than
+   * trusting a possibly-stale `parts` array, and throws, naming `component.slug` and `partName`,
+   * when the part doesn't exist or is read-only (`PartInfo.readOnlyReason`), or when `classes`
+   * fails the adapter's safe class-token grammar (no quotes, backtick, braces or backslash) — in
+   * every failure case, nothing is written to disk.
    */
-  writePart(component: ComponentInfo, partName: string, classes: string): Write;
+  writePart(component: ComponentInfo, partName: string, classes: string, source?: string): Write;
   install(root: string, slugs: string[], exec: ExecFn): Promise<void>;
   /** Run the library's own project init (its first-run scaffolding command) through `exec`, for `canon init --lib` when `detect` finds nothing yet. */
   initProject(root: string, exec: ExecFn): Promise<void>;

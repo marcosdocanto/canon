@@ -91,10 +91,53 @@ async function bootServe(t: TestContext, dist: string, design: string, projectRo
   return { request };
 }
 
+/**
+ * A single component file with BOTH a `cva()` (`toolbarVariants`, on `Toolbar`) and a plain,
+ * editable sibling part (`ToolbarSeparator`'s own `cn("literal", className)` className) — for the
+ * same-file cva+parts composition tests below. `Toolbar` itself is dynamic-only (its className is
+ * `cn(toolbarVariants({ variant }), className)`, same non-literal-first-arg shape as the fixture's
+ * own button.tsx/badge.tsx), so only `ToolbarSeparator` is an editable part in this file.
+ */
+const TOOLBAR_TSX = `import * as React from "react"
+import { cva, type VariantProps } from "class-variance-authority"
+
+import { cn } from "~/lib/utils"
+
+const toolbarVariants = cva(
+  "flex items-center gap-2 rounded-md border p-2",
+  {
+    variants: {
+      variant: {
+        default: "bg-background",
+        ghost: "bg-transparent",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  }
+)
+
+export interface ToolbarProps
+  extends React.HTMLAttributes<HTMLDivElement>,
+    VariantProps<typeof toolbarVariants> {}
+
+function Toolbar({ className, variant, ...props }: ToolbarProps) {
+  return <div className={cn(toolbarVariants({ variant }), className)} {...props} />
+}
+
+function ToolbarSeparator({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("mx-1 h-4 w-px bg-border", className)} {...props} />
+}
+
+export { Toolbar, toolbarVariants, ToolbarSeparator }
+`;
+
 /** Clone the shadcn-app fixture, adopt it (apply: true), and boot the resulting adapter-mode project's Studio. */
-async function libFixture(t: TestContext, opts: { v3?: boolean } = {}) {
+async function libFixture(t: TestContext, opts: { v3?: boolean; extraFiles?: Record<string, string> } = {}) {
   const root = clone(t);
   if (opts.v3) writeFileSync(join(root, 'app', 'globals.css'), V3_CSS);
+  for (const [rel, content] of Object.entries(opts.extraFiles ?? {})) writeFileSync(join(root, rel), content);
   await adopt({ root, apply: true, hooks: false });
   const design = join(root, 'design');
   const dist = join(design, 'dist');
@@ -198,6 +241,33 @@ test('GET /api/lib/state rejects a non-GET method', async (t) => {
   const f = await libFixture(t);
   const res = await f.request('/api/lib/state', { method: 'POST' });
   assert.equal(res.status, 405);
+});
+
+test('GET /api/lib/state exposes each component\'s parts (client-safe subset), and hashes a file with an editable part even without a cva()', async (t) => {
+  const f = await libFixture(t);
+  const body = (await f.request('/api/lib/state')).json();
+
+  const dialog = body.components.find((c: any) => c.slug === 'dialog');
+  assert.ok(dialog, 'dialog is inventoried');
+  assert.equal(dialog.cva, undefined, 'dialog.tsx has no cva() at all');
+  assert.ok(Array.isArray(dialog.parts), 'dialog exposes a parts array');
+  assert.deepEqual(dialog.parts.map((p: any) => p.name), [
+    'Dialog', 'DialogTrigger', 'DialogPortal', 'DialogClose',
+    'DialogOverlay', 'DialogContent', 'DialogHeader', 'DialogFooter',
+    'DialogTitle', 'DialogDescription',
+  ]);
+
+  const overlay = dialog.parts.find((p: any) => p.name === 'DialogOverlay');
+  assert.equal(overlay.classes, 'fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0');
+  assert.equal(overlay.dynamicTail, 'className');
+  assert.equal(overlay.span, undefined, 'the internal byte-offset span is never exposed to the client');
+
+  const trigger = dialog.parts.find((p: any) => p.name === 'DialogTrigger');
+  assert.equal(trigger.classes, undefined);
+  assert.equal(trigger.readOnlyReason, 'no static className found');
+
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  assert.equal(body.hashes[dialogFile], sha256(dialogFile), 'dialog.tsx joins the hash allowlist because it has editable parts, even with zero cva()');
 });
 
 test('GET /api/lib/preview renders the current theme and inventory as HTML built from disk', async (t) => {
@@ -305,6 +375,156 @@ test('POST /api/lib/save writes theme + variant changes in one atomic transactio
   assert.match(designMd, /#abcdef/);
 });
 
+test('POST /api/lib/save applies a part edit (dialog, no cva at all), byte-identical everywhere except the spliced literal', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const before = readFileSync(dialogFile, 'utf8');
+  const footerBefore = state.components.find((c: any) => c.slug === 'dialog').parts.find((p: any) => p.name === 'DialogFooter');
+  assert.equal(footerBefore.classes, 'flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2');
+
+  const newClasses = 'flex flex-col-reverse gap-2 sm:flex-row sm:justify-end';
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { dialog: { DialogFooter: newClasses } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 200);
+  const body = res.json();
+
+  const dialogAfter = body.components.find((c: any) => c.slug === 'dialog');
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogFooter').classes, newClasses);
+  // Sibling parts in the same file are untouched.
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogHeader').classes, 'flex flex-col space-y-1.5 text-center sm:text-left');
+
+  const after = readFileSync(dialogFile, 'utf8');
+  assert.ok(after.includes(`"${newClasses}"`));
+  const spliceStart = before.indexOf(`"${footerBefore.classes}"`);
+  assert.ok(spliceStart >= 0);
+  const spliceEnd = spliceStart + `"${footerBefore.classes}"`.length;
+  assert.equal(after.slice(0, spliceStart), before.slice(0, spliceStart), 'prefix byte-identical');
+  assert.equal(after.slice(after.length - (before.length - spliceEnd)), before.slice(spliceEnd), 'suffix byte-identical');
+
+  assert.equal(body.hashes[dialogFile], sha256(dialogFile));
+  assert.notEqual(body.hashes[dialogFile], state.hashes[dialogFile]);
+});
+
+test('POST /api/lib/save composes a cva edit and a part edit to the SAME file in one transaction', async (t) => {
+  const f = await libFixture(t, { extraFiles: { 'src/ui/toolbar.tsx': TOOLBAR_TSX } });
+  const state = (await f.request('/api/lib/state')).json();
+  const toolbarFile = join(f.root, 'src', 'ui', 'toolbar.tsx');
+  const toolbar = state.components.find((c: any) => c.slug === 'toolbar');
+  assert.ok(toolbar, 'toolbar.tsx is inventoried');
+  assert.ok(toolbar.cva, 'toolbar has a parsed cva spec');
+  const separatorBefore = toolbar.parts.find((p: any) => p.name === 'ToolbarSeparator');
+  assert.equal(separatorBefore.classes, 'mx-1 h-4 w-px bg-border');
+  assert.equal(toolbar.parts.find((p: any) => p.name === 'Toolbar').readOnlyReason, 'dynamic classes only');
+  assert.equal(state.hashes[toolbarFile], sha256(toolbarFile), 'toolbar.tsx is hashed: it has both a cva() and an editable part');
+
+  const draftCva = JSON.parse(JSON.stringify(toolbar.cva));
+  draftCva.variants.variant.ghost = ['bg-transparent', 'border-dashed'];
+  const newSeparatorClasses = 'mx-2 h-6 w-px bg-border/50';
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      components: { toolbar: draftCva },
+      parts: { toolbar: { ToolbarSeparator: newSeparatorClasses } },
+      hashes: state.hashes,
+    }),
+  });
+  assert.equal(res.status, 200);
+  const body = res.json();
+
+  const toolbarAfter = body.components.find((c: any) => c.slug === 'toolbar');
+  assert.deepEqual(toolbarAfter.cva.variants.variant.ghost, ['bg-transparent', 'border-dashed']);
+  assert.equal(toolbarAfter.parts.find((p: any) => p.name === 'ToolbarSeparator').classes, newSeparatorClasses);
+
+  // Both the cva() call AND the part literal actually parse correctly from the same final file —
+  // exactly the "same-file composition" acceptance criterion: cva fixed-point AND part fixed-point.
+  const finalSource = readFileSync(toolbarFile, 'utf8');
+  assert.match(finalSource, /border-dashed/);
+  assert.ok(finalSource.includes(`"${newSeparatorClasses}"`));
+  assert.ok(finalSource.includes('export interface ToolbarProps'), 'hand-authored code outside cva/parts spans survives byte-identically');
+  assert.ok(finalSource.includes('export { Toolbar, toolbarVariants, ToolbarSeparator }'));
+
+  assert.equal(body.hashes[toolbarFile], sha256(toolbarFile));
+  assert.notEqual(body.hashes[toolbarFile], state.hashes[toolbarFile]);
+});
+
+test('POST /api/lib/save rejects an unsafe class string in a PART payload (quote breakout), 422, zero writes', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const before = readFileSync(dialogFile, 'utf8');
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { dialog: { DialogFooter: 'bg-primary" onClick={alert(1)} x="' } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 422);
+  const json = res.json();
+  assert.equal(json.slug, 'dialog');
+  assert.equal(json.partName, 'DialogFooter');
+  assert.equal(readFileSync(dialogFile, 'utf8'), before, 'dialog.tsx must be untouched');
+});
+
+test('POST /api/lib/save refuses a read-only part in the payload, naming the slug and part, zero writes', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const before = readFileSync(dialogFile, 'utf8');
+  const dialog = state.components.find((c: any) => c.slug === 'dialog');
+  const trigger = dialog.parts.find((p: any) => p.name === 'DialogTrigger');
+  assert.ok(trigger.readOnlyReason, 'DialogTrigger is a plain alias with no static className: read-only');
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { dialog: { DialogTrigger: 'block' } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 422);
+  const json = res.json();
+  assert.equal(json.slug, 'dialog');
+  assert.equal(json.partName, 'DialogTrigger');
+  assert.equal(readFileSync(dialogFile, 'utf8'), before, 'dialog.tsx must be untouched');
+});
+
+test('POST /api/lib/save rejects an unknown part name, naming the slug and part, zero writes', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const before = readFileSync(dialogFile, 'utf8');
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { dialog: { NoSuchPart: 'block' } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 422);
+  const json = res.json();
+  assert.equal(json.slug, 'dialog');
+  assert.equal(json.partName, 'NoSuchPart');
+  assert.equal(readFileSync(dialogFile, 'utf8'), before, 'dialog.tsx must be untouched');
+});
+
+test('POST /api/lib/save with an empty parts map for an otherwise-valid slug is a graceful no-op (does not crash), file untouched', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const before = readFileSync(dialogFile, 'utf8');
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { dialog: {} }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(readFileSync(dialogFile, 'utf8'), before, 'dialog.tsx must be untouched: nothing was actually spliced');
+});
+
 test('POST /api/lib/save serializes concurrent saves: the second gets 409 "already in progress", first wins, second never writes', async (t) => {
   // In-process, not the spawned-child-process `libFixture` — see mockReq/mockRes above for why.
   const root = clone(t);
@@ -381,6 +601,25 @@ test('POST /api/lib/save refuses on a conflicting hash: names the stale file, wr
   assert.equal(res.status, 409);
   assert.equal(res.json().file, buttonFile);
   assert.equal(readFileSync(themeFile, 'utf8'), cssBefore, 'globals.css must be untouched when the save is refused');
+});
+
+test('POST /api/lib/save refuses a PARTS-only save on a conflicting hash: names the stale file, writes nothing', async (t) => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const dialogBefore = readFileSync(dialogFile, 'utf8');
+
+  // Simulate a concurrent edit to the very file this save's part targets.
+  writeFileSync(dialogFile, dialogBefore + '\n// concurrent edit\n');
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { dialog: { DialogFooter: 'flex gap-2' } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.json().file, dialogFile);
+  assert.equal(readFileSync(dialogFile, 'utf8'), dialogBefore + '\n// concurrent edit\n', 'dialog.tsx must be untouched (still holding only the concurrent edit) when the save is refused');
 });
 
 test('POST /api/lib/save rejects an unknown top-level field', async (t) => {

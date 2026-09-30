@@ -7,7 +7,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getAdapter } from './adapters/index.ts';
-import type { Adapter, ComponentInfo, CvaSpec, LibraryTheme } from './adapters/types.ts';
+import type { Adapter, ComponentInfo, CvaSpec, LibraryTheme, PartInfo } from './adapters/types.ts';
 import { HttpError, installFiles, record, requireValue, type Write } from './design-files.ts';
 import { buildLibWrites } from './build-lib.ts';
 import { previewHtml } from './generators/preview-lib.ts';
@@ -41,16 +41,32 @@ function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-/** sha256 of the theme css file and every component file that has a `cva()` — the set a save (Task 3) would touch and must re-verify unchanged. Read-only components are never hashed: there's nothing about them a save could conflict on. */
+/**
+ * True when a save could actually change `c.file`'s bytes: it has a `cva()`, OR at least one part
+ * with an editable literal (`PartInfo.span` set — see shadcn/parts.ts). A component that is
+ * entirely read-only at both levels (no `cva`, every part either absent or `readOnlyReason`-only)
+ * has nothing a save could conflict on, so its file is never hashed or added to the save's "known
+ * files" allowlist (see `handleSave`).
+ */
+function hashableComponent(c: ComponentInfo): boolean {
+  return Boolean(c.cva) || Boolean(c.parts?.some((part) => part.span !== undefined));
+}
+
+/** sha256 of the theme css file and every component file a save could touch — one with a `cva()`, an editable part, or both (see `hashableComponent`). A component with neither is never hashed: there's nothing about it a save could conflict on. */
 function stateHashes(theme: LibraryTheme, components: ComponentInfo[]): Record<string, string> {
   const hashes: Record<string, string> = { [theme.file]: sha256File(theme.file) };
-  for (const component of components) if (component.cva) hashes[component.file] = sha256File(component.file);
+  for (const component of components) if (hashableComponent(component)) hashes[component.file] = sha256File(component.file);
   return hashes;
 }
 
-/** The subset of `ComponentInfo` the client ever sees — never the absolute `file` path (that only appears, keyed, inside `hashes`) or the internal `cvaSpan`. */
+/** The subset of `PartInfo` the client ever sees — never the internal byte-offset `span` (same rule as `ComponentInfo.file`/`cvaSpan` below). */
+function publicPart(p: PartInfo) {
+  return { name: p.name, classes: p.classes, dynamicTail: p.dynamicTail, readOnlyReason: p.readOnlyReason, note: p.note };
+}
+
+/** The subset of `ComponentInfo` the client ever sees — never the absolute `file` path (that only appears, keyed, inside `hashes`), the internal `cvaSpan`, or any part's internal `span` (see `publicPart`). */
 function publicComponent(c: ComponentInfo) {
-  return { slug: c.slug, importPath: c.importPath, exportName: c.exportName, readOnlyReason: c.readOnlyReason, cva: c.cva };
+  return { slug: c.slug, importPath: c.importPath, exportName: c.exportName, readOnlyReason: c.readOnlyReason, cva: c.cva, parts: c.parts?.map(publicPart) };
 }
 
 /**
@@ -125,12 +141,36 @@ function draftCvaSpec(value: unknown, name: string): CvaSpec {
   return { base, variants, compoundVariants, defaultVariants };
 }
 
-interface SaveBody { theme?: LibraryTheme; components?: Record<string, CvaSpec>; hashes: Record<string, string> }
+interface SaveBody { theme?: LibraryTheme; components?: Record<string, CvaSpec>; parts?: Record<string, Record<string, string>>; hashes: Record<string, string> }
 
-/** Validate a `POST /api/lib/save` body: only `theme` (optional), `components` (optional) and `hashes` (required) at the top level. */
+/**
+ * Validate a `POST /api/lib/save` body's `parts` field: `Record<slug, Record<partName, classes>>`,
+ * shape only (`classes` a plain string) — the same "shape, not safety" split `draftCvaSpec` documents:
+ * the adapter's own grammar guard (`writePart`'s `validateClassList`) is the contract point for
+ * rejecting a hostile `classes` string, not this parser.
+ */
+function draftParts(value: unknown): Record<string, Record<string, string>> {
+  const raw = record(value, 'parts');
+  // Object.create(null) at BOTH levels — see the identical `__proto__`-key comment on `components`
+  // below; a slug or part name of `__proto__` must become a real own property, never silently hit
+  // Object.prototype's own `__proto__` setter and vanish from the save.
+  const parts = Object.create(null) as Record<string, Record<string, string>>;
+  for (const [slug, rawPartMap] of Object.entries(raw)) {
+    const partMap = record(rawPartMap, `parts.${slug}`);
+    const inner: Record<string, string> = Object.create(null);
+    for (const [partName, classes] of Object.entries(partMap)) {
+      requireValue(typeof classes === 'string', `parts.${slug}.${partName} must be a string`);
+      inner[partName] = classes;
+    }
+    parts[slug] = inner;
+  }
+  return parts;
+}
+
+/** Validate a `POST /api/lib/save` body: only `theme` (optional), `components` (optional), `parts` (optional) and `hashes` (required) at the top level. */
 function saveBody(value: unknown): SaveBody {
   const body = record(value, 'Save body');
-  for (const key of Object.keys(body)) requireValue(key === 'theme' || key === 'components' || key === 'hashes', `Unknown save field: ${key}`);
+  for (const key of Object.keys(body)) requireValue(key === 'theme' || key === 'components' || key === 'parts' || key === 'hashes', `Unknown save field: ${key}`);
   requireValue('hashes' in body, 'Save body requires a hashes field');
   const rawHashes = record(body.hashes, 'hashes');
   const hashes: Record<string, string> = {};
@@ -149,7 +189,8 @@ function saveBody(value: unknown): SaveBody {
     components = Object.create(null) as Record<string, CvaSpec>;
     for (const [slug, spec] of Object.entries(rawComponents)) components[slug] = draftCvaSpec(spec, `components.${slug}`);
   }
-  return { theme, components, hashes };
+  const parts = 'parts' in body ? draftParts(body.parts) : undefined;
+  return { theme, components, parts, hashes };
 }
 
 /** The `GET /api/lib/state` payload, built fresh off disk — also what a successful save responds with. */
@@ -222,19 +263,29 @@ export function libHandler(root: string, adapterId: string, designDir: string): 
  *      shape native Studio's own `/api/save` (serve.ts) uses, guarding the same
  *      read-current-state-then-write shape of race.
  *   1. Shape-validate the body (unknown top-level field → 400) and every slug named in `components`
- *      against the CURRENT inventory (unknown or read-only → 422, naming the slug).
- *   2. Every file this save will touch (the theme file, when `theme` is present; each named
- *      component's file) must have a hash in the body's `hashes` — a missing one is a 400 (a client
- *      bug: saving over an unverified file defeats conflict safety). Every KEY in `hashes` must also
- *      be one of the files this Studio would itself hand out (the theme file or an inventoried
- *      cva() component's file) — an unknown path is a 400 before any hash is computed, so `hashes`
- *      can never be used to make the server `readFileSync`/hash an arbitrary path. Then re-hash
- *      EVERY file listed in `hashes` (not only the touched ones — the client's whole last-known
- *      snapshot) against disk — any mismatch is a 409 naming that file, before anything is written.
- *   3. Stage `adapter.writeTheme` (theme present) and `adapter.writeVariants` per named component —
- *      an adapter throw (shape-valid but hostile input the adapter's own guards reject, e.g. a
- *      CSS-injecting theme var or an unsafe variant key) is a 422, nothing written — plus the
- *      regenerated dist + stories (`buildLibWrites`, fed the in-memory next theme/components so
+ *      or `parts` against the CURRENT inventory (unknown slug → 422, naming it). A `components` slug
+ *      with no `cva` is 422 as read-only; a `parts` slug's every named part must exist and be
+ *      editable (`PartInfo.span` set) — an unknown or read-only part is 422, naming both the slug
+ *      and the part.
+ *   2. Every file this save will touch (the theme file, when `theme` is present; each file named in
+ *      `components` or `parts` — the same file, when the same slug appears in both, since a part
+ *      belongs to the component whose file it lives in) must have a hash in the body's `hashes` — a
+ *      missing one is a 400 (a client bug: saving over an unverified file defeats conflict safety).
+ *      Every KEY in `hashes` must also be one of the files this Studio would itself hand out (the
+ *      theme file or a component file with a `cva()`, an editable part, or both — `hashableComponent`)
+ *      — an unknown path is a 400 before any hash is computed, so `hashes` can never be used to make
+ *      the server `readFileSync`/hash an arbitrary path. Then re-hash EVERY file listed in `hashes`
+ *      (not only the touched ones — the client's whole last-known snapshot) against disk — any
+ *      mismatch is a 409 naming that file, before anything is written.
+ *   3. Stage `adapter.writeTheme` (theme present) and, per touched slug, `adapter.writeVariants` (its
+ *      `components` entry, if any) THEN `adapter.writePart` for each of its `parts` entries in turn
+ *      (controller ruling: same-file cva+parts composition, and multiple parts in one file, are
+ *      repeated adapter calls on the PRIOR call's staged content — never span math here — since each
+ *      call re-parses and re-locates its own span fresh; only the LAST call's `Write` for a slug is
+ *      kept, so one file is written once even when several of its parts changed). An adapter throw
+ *      (shape-valid but hostile input the adapter's own guards reject, e.g. a CSS-injecting theme
+ *      var, an unsafe variant key, or a part's unsafe class string) is a 422, nothing written — plus
+ *      the regenerated dist + stories (`buildLibWrites`, fed the in-memory next theme/components so
  *      DESIGN.md/stories describe what this save is about to commit, not stale disk).
  *   4. One `installFiles` batch — atomic, rolled back whole on any failure — then respond with the
  *      same payload shape as `GET /api/lib/state`, read fresh off disk. That re-read is best-effort:
@@ -265,18 +316,30 @@ async function handleSave(req: IncomingMessage, res: ServerResponse, root: strin
       if (!info.cva) { json(res, 422, { slug, message: info.readOnlyReason ? `read-only: ${info.readOnlyReason}` : `${slug} is read-only` }); return; }
     }
 
+    for (const [slug, partMap] of Object.entries(body.parts ?? {})) {
+      const info = infoBySlug.get(slug);
+      if (!info) { json(res, 422, { slug, message: `unknown component slug: ${slug}` }); return; }
+      for (const partName of Object.keys(partMap)) {
+        const part = info.parts?.find((p) => p.name === partName);
+        if (!part) { json(res, 422, { slug, partName, message: `unknown part: ${partName}` }); return; }
+        if (part.span === undefined) { json(res, 422, { slug, partName, message: part.readOnlyReason ? `read-only: ${part.readOnlyReason}` : `${partName} is read-only` }); return; }
+      }
+    }
+
     const touched = new Set<string>();
     if (body.theme) touched.add(currentTheme.file);
     for (const slug of Object.keys(body.components ?? {})) touched.add(infoBySlug.get(slug)!.file);
+    for (const slug of Object.keys(body.parts ?? {})) touched.add(infoBySlug.get(slug)!.file);
     for (const file of touched) requireValue(file in body.hashes, `Missing hash for ${file}: every file this save touches must be covered by "hashes"`);
 
     // Every key in `hashes` must be a path this Studio would itself have handed out in `GET
-    // /api/lib/state` — the theme file or an inventoried component's own file with a cva() (see
-    // `stateHashes`). Without this check, `hashes` is an attacker-controlled map of arbitrary strings
-    // read straight into `sha256File` -> `readFileSync`: a bogus path could hang the process reading a
-    // FIFO, or leak whether some arbitrary filesystem path exists/is readable via the response's
-    // status code. A 400 here, before any hash is computed, closes that off.
-    const knownFiles = new Set<string>([currentTheme.file, ...currentComponents.filter((c) => c.cva).map((c) => c.file)]);
+    // /api/lib/state` — the theme file or a component file `hashableComponent` would hash (a `cva()`,
+    // an editable part, or both — see `stateHashes`). Without this check, `hashes` is an
+    // attacker-controlled map of arbitrary strings read straight into `sha256File` -> `readFileSync`:
+    // a bogus path could hang the process reading a FIFO, or leak whether some arbitrary filesystem
+    // path exists/is readable via the response's status code. A 400 here, before any hash is
+    // computed, closes that off.
+    const knownFiles = new Set<string>([currentTheme.file, ...currentComponents.filter(hashableComponent).map((c) => c.file)]);
     for (const file of Object.keys(body.hashes)) requireValue(knownFiles.has(file), `Unknown path in hashes: ${file}`);
 
     for (const [file, expected] of Object.entries(body.hashes)) {
@@ -295,13 +358,40 @@ async function handleSave(req: IncomingMessage, res: ServerResponse, root: strin
     }
 
     const nextComponents = currentComponents.slice();
-    for (const [slug, spec] of Object.entries(body.components ?? {})) {
+    // One touched slug can carry BOTH a `components` (cva) entry and a `parts` entry for the same
+    // file. Per the controller ruling, compose them as repeated adapter calls on the PRIOR call's
+    // staged content — cva first, then each part in turn — rather than any span math here: each
+    // `writeVariants`/`writePart` call re-parses and re-locates its own span fresh inside whatever
+    // source it's given, so this is safe even though a part's span (or the cva span) may have moved
+    // after an earlier splice in this same loop iteration. Only the LAST call's `Write` for a slug is
+    // kept — every intermediate one is a full-file buffer already folded into the next call's input,
+    // so the file is written to disk exactly once even when several of its parts changed.
+    const touchedSlugs = new Set<string>([...Object.keys(body.components ?? {}), ...Object.keys(body.parts ?? {})]);
+    for (const slug of touchedSlugs) {
       const info = infoBySlug.get(slug)!;
-      let write: Write;
-      try { write = adapter.writeVariants(info, spec); }
-      catch (error) { json(res, 422, { slug, message: (error as Error).message }); return; }
-      writes.push(write);
-      nextComponents[nextComponents.findIndex((c) => c.slug === slug)] = { ...info, cva: spec, readOnlyReason: undefined };
+      let staged: string | undefined;
+      let write: Write | undefined;
+
+      if (body.components && slug in body.components) {
+        const spec = body.components[slug];
+        try { write = adapter.writeVariants(info, spec); }
+        catch (error) { json(res, 422, { slug, message: (error as Error).message }); return; }
+        staged = write.content.toString('utf8');
+        nextComponents[nextComponents.findIndex((c) => c.slug === slug)] = { ...info, cva: spec, readOnlyReason: undefined };
+      }
+
+      if (body.parts && slug in body.parts) {
+        for (const [partName, classes] of Object.entries(body.parts[slug])) {
+          try { write = adapter.writePart(info, partName, classes, staged); }
+          catch (error) { json(res, 422, { slug, partName, message: (error as Error).message }); return; }
+          staged = write.content.toString('utf8');
+        }
+      }
+
+      // `write` is undefined only when this slug's own `parts` entry was an empty object (`{}`) and
+      // it has no `components` entry either — a degenerate but not-hostile payload shape (nothing to
+      // splice, so nothing to write) that must not crash `installFiles` below on an undefined Write.
+      if (write) writes.push(write);
     }
 
     writes.push(...await buildLibWrites(root, designDir, { theme: body.theme ?? currentTheme, components: nextComponents }));
