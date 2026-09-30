@@ -36,7 +36,7 @@ test('initLib: not detected -> runs shadcn init + core-slug add via exec, writes
 
   assert.equal(calls.length, 2, 'expected exactly one init call and one add call');
   assert.equal(calls[0].cmd, 'npx');
-  assert.deepEqual(calls[0].args, ['shadcn@latest', 'init', '--yes', '-b', 'neutral']);
+  assert.deepEqual(calls[0].args, ['shadcn@latest', 'init', '--yes', '-b', 'radix']);
   assert.equal(calls[0].cwd, root);
   assert.equal(calls[1].cmd, 'npx');
   assert.deepEqual(calls[1].args.slice(0, 2), ['shadcn@latest', 'add']);
