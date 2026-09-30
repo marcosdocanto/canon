@@ -3,7 +3,7 @@ import { cpSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const FIXTURE = new URL('./shadcn-app', import.meta.url).pathname;
+export const FIXTURE = new URL('./shadcn-app', import.meta.url).pathname;
 
 /** Clone the shadcn-app fixture into a fresh temp dir that's removed when `t`'s test finishes. */
 export function clone(t: any): string {
