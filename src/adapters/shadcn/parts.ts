@@ -16,11 +16,21 @@
 // ever qualifies. `{expression}` children are opaque: never descended into looking for embedded
 // JSX, since that would mean evaluating arbitrary JS rather than staying a scanner.
 //
+// Ruling (review amendment): the outer function's own top-level `return` statements are found by a
+// function/arrow-SCOPE-aware scan (see `findTopLevelReturnStarts`) — a nested function expression or
+// arrow's own body (e.g. an `.map(item => { return <li .../> })` callback) is skipped as a unit, so
+// its `return` is never mistaken for the component's own. ALL of the outer function's own top-level
+// returns are collected (guard clauses like shadcn's Sidebar routinely have several); each is walked
+// independently, and the FIRST one whose JSX yields a static literal wins. When more than one branch
+// yields a (possibly different) literal, the part still resolves to the first one's literal, plus a
+// non-blocking `note` saying how many branches did and that branch 1 is the one being edited — an
+// honest signal rather than a silent pick or a spurious read-only.
+//
 // Reuses cva.ts's comment/string/template/regex-aware scanner (`skipNonCode`, `IDENT_CHAR`) so this
 // walker never mistakes a `<` or a quote inside a string/comment/template for real code — the same
 // discipline that makes `findCva` safe to run over arbitrary source. Still a scanner (a bounded,
-// source-order walk), not a full JSX AST: it understands just enough tag/attribute/children
-// structure to recurse, not general JSX semantics.
+// source-order walk), not a full JSX AST: it understands just enough tag/attribute/children/function
+// structure to recurse and to skip nested scopes, not general JS/JSX semantics.
 import type { PartInfo } from '../types.ts';
 import { IDENT_CHAR, skipNonCode } from './cva.ts';
 
@@ -215,30 +225,79 @@ function findArrowBodyStart(source: string, pos: number, limit: number): number 
   return undefined;
 }
 
-/** Find the first `return` keyword's expression start within a block body `[blockStart, blockEnd)`, peeling one wrapping `(`. Undefined for `return;`/no return found. */
-function findReturnExprStart(source: string, blockStart: number, blockEnd: number): number | undefined {
+/**
+ * Find every OUTER-function top-level `return` statement's expression start within a block body
+ * `[blockStart, blockEnd)`, in source order (peeling one wrapping `(` per return, as before).
+ * `return;` (or a `return` with nothing after it) contributes no entry.
+ *
+ * Scope-aware (fixes the CRITICAL misattribution a closure could cause): a nested `function`
+ * declaration/expression's body, or an arrow function's `{ … }` body, is skipped as a whole unit via
+ * brace matching before this scan ever looks for `return` inside it — so `items.map(item => { return
+ * <li className="item-class"> })` never has its closure's own return mistaken for the enclosing
+ * component's. An expression-bodied arrow (`=> expr`, no `{`) is NOT itself a scope boundary here —
+ * it can't syntactically hold a bare `return` statement — but anything nested inside `expr` (another
+ * function, another arrow-with-block) is still caught by these same two checks as the scan continues
+ * through it, so nothing inside is missed.
+ */
+function findTopLevelReturnStarts(source: string, blockStart: number, blockEnd: number): number[] {
+  const starts: number[] = [];
   let i = blockStart;
   while (i < blockEnd) {
     const skipped = skipNonCode(source, i);
     if (skipped !== undefined) { i = skipped; continue; }
+
+    // Nested function declaration/expression: skip its entire body as one unit.
+    if (source.startsWith('function', i) && !IDENT_CHAR.test(source[i - 1] ?? '') && !IDENT_CHAR.test(source[i + 8] ?? '')) {
+      let j = skipWsAndComments(source, i + 8, blockEnd);
+      if (source[j] === '*') j = skipWsAndComments(source, j + 1, blockEnd);
+      j = skipIdentSimple(source, j, blockEnd); // optional name
+      j = skipWsAndComments(source, j, blockEnd);
+      if (source[j] === '(') {
+        j = skipParens(source, j);
+        while (j < blockEnd && source[j] !== '{') {
+          const s = skipNonCode(source, j);
+          j = s !== undefined ? s : j + 1;
+        }
+        if (j < blockEnd && source[j] === '{') { i = Math.min(skipBraces(source, j), blockEnd); continue; }
+      }
+      i = Math.max(j, i + 8); // malformed/unexpected shape — bail forward defensively, never backward
+      continue;
+    }
+
+    // Arrow function with a BLOCK body (`=> { … }`): skip the whole block as one unit. An
+    // expression-bodied arrow (`=> expr`) isn't a scope boundary — see the docstring above.
+    if (source[i] === '=' && source[i + 1] === '>') {
+      const j = skipWsAndComments(source, i + 2, blockEnd);
+      if (j < blockEnd && source[j] === '{') { i = Math.min(skipBraces(source, j), blockEnd); continue; }
+      i += 2;
+      continue;
+    }
+
     if (source.startsWith('return', i) && !IDENT_CHAR.test(source[i - 1] ?? '') && !IDENT_CHAR.test(source[i + 6] ?? '')) {
       const j = skipWsAndComments(source, i + 6, blockEnd);
-      if (j >= blockEnd || source[j] === ';') return undefined;
-      return source[j] === '(' ? skipWsAndComments(source, j + 1, blockEnd) : j;
+      if (j < blockEnd && source[j] !== ';' && source[j] !== '}') {
+        starts.push(source[j] === '(' ? skipWsAndComments(source, j + 1, blockEnd) : j);
+      }
+      i += 6; // past the word "return" only — the rest of its expression is still scanned normally
+      // (for nested closures inside it, e.g. an event handler) by the same rules, from here on.
+      continue;
     }
+
     i++;
   }
-  return undefined;
+  return starts;
 }
 
 /**
- * Locate the root JSX element's leading `<` for the subcomponent declared in `[start, end)`, or
- * undefined when — under the safe subset — its return value isn't traceably a JSX element: a plain
- * value alias (`const Dialog = DialogPrimitive.Root`), a non-JSX return, or a shape this walker
- * doesn't understand. Handles `function Name(...) { ... }`, `const Name = (...) => (<JSX/>)`,
- * `const Name = (...) => { ...; return (<JSX/>) }`, and one level of wrapping call (`React.forwardRef`).
+ * Find every "candidate" return-expression start for the subcomponent declared in `[start, end)`:
+ * for a block-bodied function/arrow, one entry per top-level `return` (see
+ * `findTopLevelReturnStarts`); for an implicit-return arrow (`=> (<JSX/>)` or `=> <JSX/>`), the
+ * single expression it returns (as one candidate). Empty for a plain value alias (`const Dialog =
+ * DialogPrimitive.Root`) or an unsupported shape. Handles `function Name(...) { ... }`, `const Name =
+ * (...) => (<JSX/>)`, `const Name = (...) => { ...; return (<JSX/>) }`, and one level of wrapping
+ * call (`React.forwardRef`). Does not filter by "is this JSX" — the caller does that.
  */
-function locateJsxStart(source: string, start: number, end: number): number | undefined {
+function findCandidateStarts(source: string, start: number, end: number): number[] {
   let i = start;
   let isFunction = false;
   let assignPos: number | undefined;
@@ -252,7 +311,9 @@ function locateJsxStart(source: string, start: number, end: number): number | un
     i++;
   }
 
-  let bodyStart: number | undefined;
+  let blockContent: { start: number; end: number } | undefined;
+  let exprStart: number | undefined;
+
   if (isFunction) {
     let j = skipWsAndComments(source, i, end);
     if (source[j] === '*') j++;
@@ -260,34 +321,60 @@ function locateJsxStart(source: string, start: number, end: number): number | un
     j = skipIdentSimple(source, j, end); // function name
     j = skipWsAndComments(source, j, end);
     if (source[j] === '<') j = skipWsAndComments(source, Math.min(skipGenerics(source, j), end), end);
-    if (source[j] !== '(') return undefined;
+    if (source[j] !== '(') return [];
     j = skipParens(source, j);
     while (j < end && source[j] !== '{') {
       const skipped = skipNonCode(source, j);
       j = skipped !== undefined ? skipped : j + 1;
     }
-    if (j >= end || source[j] !== '{') return undefined;
+    if (j >= end || source[j] !== '{') return [];
     const blockEnd = Math.min(skipBraces(source, j), end);
-    bodyStart = findReturnExprStart(source, j + 1, blockEnd - 1);
+    blockContent = { start: j + 1, end: blockEnd - 1 };
   } else if (assignPos !== undefined) {
     const afterArrow = findArrowBodyStart(source, assignPos, end);
-    if (afterArrow === undefined) return undefined;
+    if (afterArrow === undefined) return [];
     const j = skipWsAndComments(source, afterArrow, end);
     if (source[j] === '{') {
       const blockEnd = Math.min(skipBraces(source, j), end);
-      bodyStart = findReturnExprStart(source, j + 1, blockEnd - 1);
+      blockContent = { start: j + 1, end: blockEnd - 1 };
     } else if (source[j] === '(') {
-      bodyStart = skipWsAndComments(source, j + 1, end);
+      exprStart = skipWsAndComments(source, j + 1, end);
     } else {
-      bodyStart = j;
+      exprStart = j;
     }
   } else {
-    return undefined; // no `function` and no top-level `=` in this window: not a locally-defined component
+    return []; // no `function` and no top-level `=` in this window: not a locally-defined component
   }
 
-  if (bodyStart === undefined) return undefined;
-  const jsxStart = skipWsAndComments(source, bodyStart, end);
-  return jsxStart < end && source[jsxStart] === '<' ? jsxStart : undefined;
+  if (blockContent) return findTopLevelReturnStarts(source, blockContent.start, blockContent.end);
+  return exprStart !== undefined ? [exprStart] : [];
+}
+
+/**
+ * Resolve one subcomponent's `PartInfo` from its candidate return-expression starts (see
+ * `findCandidateStarts`): walk each candidate that's actually JSX (`source[start] === '<'`; a
+ * non-JSX branch like `return null` contributes nothing) and collect every literal found. The FIRST
+ * literal-yielding branch, in source order, wins. When more than one branch yields a literal (an
+ * honest, non-blocking signal — not a reason to refuse), the winning part also carries a `note`
+ * naming how many branches did and that branch 1 is the one being edited. When no branch yields a
+ * literal, the EARLIEST non-qualifying reason across all JSX-bearing branches is used; when no
+ * candidate is JSX at all (or there are none), it's `'no static className found'`.
+ */
+function resolveFromCandidates(name: string, source: string, candidates: number[], limit: number): PartInfo {
+  const literalParts: PartInfo[] = [];
+  let fallback: PartInfo | undefined;
+  for (const candidateStart of candidates) {
+    if (candidateStart >= limit || source[candidateStart] !== '<') continue; // not JSX in this branch
+    const result = walkJsxElement(name, source, candidateStart, limit);
+    if (result.part) literalParts.push(result.part);
+    else if (!fallback) fallback = result.fallback;
+  }
+  if (literalParts.length > 0) {
+    return literalParts.length > 1
+      ? { ...literalParts[0], note: `${literalParts.length} render branches; editing branch 1` }
+      : literalParts[0];
+  }
+  return fallback ?? { name, readOnlyReason: 'no static className found' };
 }
 
 // ---- JSX tag / className attribute scanning, and the document-order descent ----------------------
@@ -395,7 +482,7 @@ function literalPart(name: string, source: string, start: number, end: number): 
   const isTemplate = source[start] === '`';
   const content = source.slice(start + 1, end - 1);
   if (isTemplate && /\$\{/.test(content)) return { name, readOnlyReason: 'template interpolation' };
-  if (content.includes('\\')) return { name, readOnlyReason: 'escaped quote in literal' };
+  if (content.includes('\\')) return { name, readOnlyReason: 'backslash escape in literal' };
   return { name, classes: content, span: { start, end } };
 }
 
@@ -483,27 +570,36 @@ function resolveAttrValue(name: string, source: string, attr: AttrValue): PartIn
 
 /**
  * Parse `source` (one component file) into one `PartInfo` per exported PascalCase subcomponent, per
- * the design doc's safe subset as amended by the controller ruling (see the file header): the part's
- * editable element is the FIRST element in document order — within the subcomponent's own return,
- * bounded the same way the export scanner bounds a component's window, so this never crosses into a
- * sibling subcomponent — that carries a static className literal, descending through className-less
- * wrapper elements (and past elements whose className fails to resolve) to find it.
+ * the design doc's safe subset as amended by two controller rulings (see the file header): (1) the
+ * part's editable element is the FIRST element in document order — within the subcomponent's own
+ * return, bounded the same way the export scanner bounds a component's window, so this never crosses
+ * into a sibling subcomponent — that carries a static className literal, descending through
+ * className-less wrapper elements (and past elements whose className fails to resolve) to find it;
+ * (2) ALL of the outer function's own top-level `return` statements are considered (guard clauses),
+ * function/arrow-scope-aware so a nested closure's own `return` is never mistaken for one of them.
  *
  * A subcomponent with no traceable JSX at all (a plain alias like `const Dialog =
- * DialogPrimitive.Root`), or whose entire return has no element with a className attribute anywhere,
- * gets `readOnlyReason: 'no static className found'`. When at least one element's className is
- * present but doesn't resolve under the safe subset, the EARLIEST such failure's own reason is used
- * instead — `'dynamic classes only'` (a helper-const reference, a `cva`-variants call, a ternary, no
- * leading string literal, …), `'template interpolation'`, or `'escaped quote in literal'` (a literal
- * containing a backslash escape is refused rather than decoded) — even if a later, different failure
- * also occurred deeper in the tree.
+ * DialogPrimitive.Root`), or whose entire return (across every branch) has no element with a
+ * className attribute anywhere, gets `readOnlyReason: 'no static className found'`. When at least one
+ * element's className is present but doesn't resolve under the safe subset, the EARLIEST such
+ * failure's own reason is used instead — `'dynamic classes only'` (a helper-const reference, a
+ * `cva`-variants call, a ternary, no leading string literal, …), `'template interpolation'`, or
+ * `'backslash escape in literal'` (refused rather than decoded) — even if a later, different failure
+ * also occurred deeper in the tree or in a later branch. When more than one return branch yields a
+ * literal, the first one's is used and `note` says so (see `resolveFromCandidates`).
+ *
+ * NOTE (deferred, tripwire only — no enforcement here): a `cva()` span and every part's span are
+ * assumed structurally disjoint, because `cva()` calls live in a module-level `const xVariants = ...`
+ * and this scanner only ever looks for a literal inside a JSX `className` attribute — never inside a
+ * `cva()` call's own argument list. If a future change ever made a part's search enter a `cva()`
+ * call's text (e.g. by broadening `exprPart`'s call-shape matching), that assumption would need an
+ * explicit disjointness check against `findCva`'s span; T3's same-file cva+parts composition must not
+ * violate it either.
  */
 export function parseParts(source: string): PartInfo[] {
   return componentWindows(source).map(({ name, start, end }) => {
-    const jsxStart = locateJsxStart(source, start, end);
-    if (jsxStart === undefined) return { name, readOnlyReason: 'no static className found' };
-    const result = walkJsxElement(name, source, jsxStart, end);
-    return result.part ?? result.fallback ?? { name, readOnlyReason: 'no static className found' };
+    const candidates = findCandidateStarts(source, start, end);
+    return resolveFromCandidates(name, source, candidates, end);
   });
 }
 

@@ -8,7 +8,7 @@ export interface LibraryTheme { file: string; vars: Record<string, { light: stri
 export interface CvaSpec { base: string[]; variants: Record<string, Record<string, string[]>>; compoundVariants: { match: Record<string, string | boolean>; classes: string[] }[]; defaultVariants: Record<string, string | boolean>; }
 
 /** One exported subcomponent's editable className literal, or the reason it can't be edited (see shadcn/parts.ts). */
-export interface PartInfo { name: string; classes?: string; span?: { start: number; end: number } /* byte offsets of the literal, INCLUDING its quotes */; dynamicTail?: string; readOnlyReason?: string; }
+export interface PartInfo { name: string; classes?: string; span?: { start: number; end: number } /* byte offsets of the literal, INCLUDING its quotes */; dynamicTail?: string; readOnlyReason?: string; note?: string /* non-blocking context, e.g. multiple conditional render branches each yield a literal and only the first is being edited */; }
 
 /** Inventory entry for a component from a library. */
 export interface ComponentInfo { slug: string; file: string; exportName: string; importPath: string; cva?: CvaSpec; cvaSpan?: { start: number; end: number }; readOnlyReason?: string; parts?: PartInfo[]; }

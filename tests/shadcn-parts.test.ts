@@ -231,6 +231,81 @@ test('the walk is bounded to one subcomponent\'s own return: a literal in the SE
   assert.ok(bar.span!.start > source.indexOf('function Bar'));
 });
 
+test('CRITICAL fix: a closure\'s own return (.map callback) is never mistaken for the component\'s own — resolves to the outer literal, not the inner one', () => {
+  // The reviewer's exact repro: a nested `.map(item => { return <li className="item-class"> })`
+  // appears, in source, BEFORE the component's own `return <ul className="list-class">`. The old
+  // flat `return`-scan picked the closure's `return` first and silently misattributed "item-class"
+  // as List's own part — exactly the failure the spec forbids (a Studio edit would touch the wrong
+  // element). The fix must resolve to "list-class".
+  const source = [
+    'function List({ items }: { items: string[] }) {',
+    '  return (',
+    '    <ul className="list-class">',
+    '      {items.map(item => {',
+    '        return <li className="item-class">{item}</li>',
+    '      })}',
+    '    </ul>',
+    '  )',
+    '}',
+    'export { List }',
+  ].join('\n');
+  const list = byName(parseParts(source), 'List');
+  assert.equal(list.classes, 'list-class');
+  assert.notEqual(list.classes, 'item-class');
+  assert.equal(list.readOnlyReason, undefined);
+  assert.equal(list.note, undefined);
+  assert.equal(source.slice(list.span!.start, list.span!.end), '"list-class"');
+});
+
+test('a closure passed as a plain callback (arrow with expression body, no block) still doesn\'t confuse the outer return', () => {
+  const source = [
+    'function List({ items }: { items: string[] }) {',
+    '  return (',
+    '    <ul className="list-class">',
+    '      {items.map(item => <li className="item-class">{item}</li>)}',
+    '    </ul>',
+    '  )',
+    '}',
+    'export { List }',
+  ].join('\n');
+  const list = byName(parseParts(source), 'List');
+  assert.equal(list.classes, 'list-class');
+});
+
+test('IMPORTANT 1: a guard clause (non-JSX return first, literal second) resolves to the literal, editable, no note', () => {
+  const source = [
+    'function Panel({ open, className }: { open: boolean; className?: string }) {',
+    '  if (!open) return null',
+    '  return <div className={cn("panel-class", className)} />',
+    '}',
+    'export { Panel }',
+  ].join('\n');
+  const panel = byName(parseParts(source), 'Panel');
+  assert.equal(panel.classes, 'panel-class');
+  assert.equal(panel.dynamicTail, 'className');
+  assert.equal(panel.readOnlyReason, undefined);
+  assert.equal(panel.note, undefined, 'only one branch has ANY literal — no multi-branch note');
+});
+
+test('a 3-branch Sidebar-like shape: the first literal-yielding branch wins, with a multi-branch note', () => {
+  const source = [
+    'function Sidebar({ collapsible, isMobile }: { collapsible: string; isMobile: boolean }) {',
+    '  if (collapsible === "none") {',
+    '    return <div className="flex h-full flex-col bg-sidebar">{null}</div>',
+    '  }',
+    '  if (isMobile) {',
+    '    return <div className="mobile-sidebar-class">{null}</div>',
+    '  }',
+    '  return <div className="desktop-sidebar-class">{null}</div>',
+    '}',
+    'export { Sidebar }',
+  ].join('\n');
+  const sidebar = byName(parseParts(source), 'Sidebar');
+  assert.equal(sidebar.classes, 'flex h-full flex-col bg-sidebar', 'first literal-yielding branch (source order) wins');
+  assert.equal(sidebar.readOnlyReason, undefined);
+  assert.equal(sidebar.note, '3 render branches; editing branch 1');
+});
+
 test('splice is byte-identical outside the span, CRLF preserved', () => {
   const crlf = DIALOG.replace(/\n/g, '\r\n');
   const overlay = byName(parseParts(crlf), 'DialogOverlay');
@@ -257,6 +332,41 @@ test('splice -> parse is a fixed point', () => {
   const splicedDescription = splicePart(DIALOG, description, 'text-sm text-muted-foreground/80');
   const reparsedDescription = byName(parseParts(splicedDescription), 'DialogDescription');
   assert.equal(reparsedDescription.classes, 'text-sm text-muted-foreground/80');
+});
+
+test('splice preserves a single-quote literal\'s quote character (pinned)', () => {
+  const source = [
+    "function Foo({ className }: { className?: string }) {",
+    "  return <div className={cn('single-quoted', className)} />",
+    "}",
+    "export { Foo }",
+  ].join('\n');
+  const foo = byName(parseParts(source), 'Foo');
+  assert.equal(foo.classes, 'single-quoted');
+  assert.equal(source[foo.span!.start], "'");
+  const spliced = splicePart(source, foo, 'new-single-quoted');
+  assert.equal(spliced.slice(foo.span!.start, foo.span!.start + 1), "'", 'opening delimiter stays a single quote');
+  assert.match(spliced, /cn\('new-single-quoted', className\)/);
+  assert.doesNotMatch(spliced, /"new-single-quoted"/, 'must not have switched to double quotes');
+  const reparsed = byName(parseParts(spliced), 'Foo');
+  assert.equal(reparsed.classes, 'new-single-quoted');
+});
+
+test('splice preserves a template-literal\'s backtick delimiters (pinned)', () => {
+  const source = [
+    'function Foo({ className }: { className?: string }) {',
+    '  return <div className={cn(`block text-sm`, className)} />',
+    '}',
+    'export { Foo }',
+  ].join('\n');
+  const foo = byName(parseParts(source), 'Foo');
+  assert.equal(foo.classes, 'block text-sm');
+  assert.equal(source[foo.span!.start], '`');
+  const spliced = splicePart(source, foo, 'block text-lg');
+  assert.equal(spliced.slice(foo.span!.start, foo.span!.start + 1), '`', 'opening delimiter stays a backtick');
+  assert.match(spliced, /cn\(`block text-lg`, className\)/);
+  const reparsed = byName(parseParts(spliced), 'Foo');
+  assert.equal(reparsed.classes, 'block text-lg');
 });
 
 test('splicePart throws for a read-only part instead of corrupting the file', () => {
