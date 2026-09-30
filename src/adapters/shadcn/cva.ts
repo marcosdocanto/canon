@@ -16,7 +16,9 @@ export class CvaParseError extends Error {
   }
 }
 
-const IDENT_CHAR = /[A-Za-z0-9_$]/;
+// Exported so other scanners in this adapter (parts.ts's JSX/className walker) can reuse the same
+// comment/string/template/regex-skipping discipline instead of re-implementing it.
+export const IDENT_CHAR = /[A-Za-z0-9_$]/;
 
 // ---- Scanner: locate the first `cva( … )` call span without a real parser --------------------
 // Walks the source once, skipping line/block comments, string/template literals (template
@@ -124,7 +126,7 @@ function skipInterpolation(source: string, i: number): number {
 }
 
 /** If `i` starts a comment, a string/template literal, or a regex literal, return the index right after it; else undefined. */
-function skipNonCode(source: string, i: number): number | undefined {
+export function skipNonCode(source: string, i: number): number | undefined {
   const c = source[i];
   if (c === '/' && source[i + 1] === '/') return skipLineComment(source, i);
   if (c === '/' && source[i + 1] === '*') return skipBlockComment(source, i);
