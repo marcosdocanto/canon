@@ -180,6 +180,36 @@ test('previewHtml gives the document real structural CSS: bordered component car
   assert.match(html, /body\s*\{[^}]*color:\s*var\(--foreground/s);
 });
 
+test('previewHtml contains fixed/absolute-positioned part and example children inside their own card: a transform establishes a containing block, overflow is clipped, and a min-height gives an inset-0 child a real box', () => {
+  const html = previewHtml(theme, [{ info: buttonInfo, examples: buttonExamples }]);
+  // `.cn-lib-example` (cva examples) and `.cn-lib-part` (styled parts) each render a component's or
+  // part's REAL classes verbatim — including shadcn/Radix overlay classes like `fixed inset-0 z-50
+  // bg-black/80` (DialogOverlay/DrawerOverlay). Per the CSS Transforms spec, a `transform` value
+  // other than `none` makes the element the containing block for `position: fixed` (and `absolute`)
+  // descendants, trapping them instead of letting them escape to cover the whole preview viewport.
+  const exampleRule = /\.cn-lib-example\s*\{([^}]*)\}/s.exec(html)?.[1] ?? '';
+  const partRule = /\.cn-lib-part\s*\{([^}]*)\}/s.exec(html)?.[1] ?? '';
+  for (const rule of [exampleRule, partRule]) {
+    assert.match(rule, /position:\s*relative;/);
+    assert.match(rule, /overflow:\s*hidden;/);
+    assert.match(rule, /transform:\s*translateZ\(0\);/); // establishes the containing block for fixed/absolute children
+    assert.match(rule, /min-height:\s*3rem;/); // so an inset-0 child still has a visible box to fill
+  }
+});
+
+test('previewHtml renders a real fixed/inset-0 overlay part (DialogOverlay) inside the SAME contained card selector as every other part — no separate escape hatch for overlay-ish classes', () => {
+  const dialogInfo: ComponentInfo = { slug: 'dialog', file: '/fake/project/src/ui/dialog.tsx', exportName: 'Dialog', importPath: '~/ui/dialog', parts: dialogParts };
+  const html = previewHtml(theme, [{ info: dialogInfo, examples: [] }]);
+  const overlay = dialogPart('DialogOverlay');
+  assert.match(overlay.classes!, /\bfixed\b/);
+  assert.match(overlay.classes!, /\binset-0\b/);
+  // The overlay renders as a `.cn-lib-part` figure, exactly like every other part — its real,
+  // untouched classes (including `fixed inset-0`) are shown, not stripped, while the shared
+  // `.cn-lib-part` rule (asserted above) is what keeps it from covering the preview.
+  assert.ok(html.includes(`<figure class="cn-lib-part" data-part="DialogOverlay"><figcaption>DialogOverlay</figcaption>`));
+  assert.match(html, new RegExp(`data-part="DialogOverlay"[\\s\\S]*?class="${escapeRegExp(overlay.classes!)}"`));
+});
+
 test('previewHtml notes a read-only component with its escaped reason', () => {
   const html = previewHtml(theme, [{ info: badgeInfo, examples: badgeExamples }]);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);

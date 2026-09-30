@@ -233,6 +233,29 @@ function varLines(theme: LibraryTheme, key: 'light' | 'dark'): string {
 const CHROME_BORDER = 'color-mix(in srgb, currentColor 14%, transparent)';
 const CHROME_MUTED = 'color-mix(in srgb, currentColor 55%, transparent)';
 
+/**
+ * Containment for a card that renders a component's or a part's REAL, unmodified classes
+ * (`.cn-lib-example`, `.cn-lib-part`): shadcn/Radix overlays and panels (DialogOverlay,
+ * DrawerOverlay, SheetContent, …) commonly carry `fixed inset-0 z-50 bg-black/…`, `absolute`,
+ * `sticky`, or a translate-based centering idiom — classes that are completely correct on the
+ * real component but, rendered verbatim as a preview swatch, escape the card and cover the whole
+ * viewport (a `position: fixed` element's containing block is the viewport itself, unless some
+ * ancestor intervenes). Per the CSS Transforms spec, any element with a `transform` value other
+ * than `none` becomes the containing block for its `position: fixed` (and `absolute`) descendants
+ * — so setting one here traps the classes in place without touching them, which is the point:
+ * this is containment, not class-stripping, and the card must still show the component's honest
+ * classes. `overflow: hidden` then clips anything that still tries to paint past the card's own
+ * box (e.g. a `backdrop-blur` scrim or an oversized translated panel), and `position: relative` +
+ * `min-height` give an `inset-0` child a real box to fill — without a height of its own, the card
+ * would otherwise collapse to zero and the "trapped" overlay would render as nothing. None of this
+ * affects normal in-flow content (Button/Badge variants, plain parts): those already have their
+ * own size from their content, so the containment properties are inert for them.
+ */
+const CARD_CONTAINMENT_CSS = `position: relative;
+  overflow: hidden;
+  transform: translateZ(0);
+  min-height: 3rem;`;
+
 const STRUCTURAL_CSS = `html, body { margin: 0; }
 body {
   min-height: 100%;
@@ -276,6 +299,7 @@ body {
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
+  ${CARD_CONTAINMENT_CSS}
 }
 .cn-lib-example > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }
 .cn-lib-parts {
@@ -292,6 +316,7 @@ body {
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
+  ${CARD_CONTAINMENT_CSS}
 }
 .cn-lib-part > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }
 .cn-lib-part-readonly, .cn-lib-part-note { margin: 0; font-size: 12px; color: ${CHROME_MUTED}; }`;
