@@ -29,3 +29,34 @@ test('findCva skips cva mentions inside strings and comments', () => {
   assert.equal(source.slice(span.start, span.start + 4), 'cva(');
   assert.ok(source.slice(span.start, span.end).includes('"a b"'));
 });
+
+test('rejects unknown top-level keys on the options object', () => {
+  const source = `const v = cva("x", { variants: {}, compoundSlots: [] })`;
+  const span = findCva(source)!;
+  assert.throws(() => parseCva(source, span), (e: CvaParseError) =>
+    e instanceof CvaParseError && e.construct === 'unknown option');
+});
+
+test('findCva is not desynced by a regex literal containing a quote', () => {
+  const source = `const re = /"/;\nconst v = cva("real", {});`;
+  const span = findCva(source)!;
+  assert.equal(source.slice(span.start, span.start + 4), 'cva(');
+  const spec = parseCva(source, span);
+  assert.deepEqual(spec.base, ['real']);
+});
+
+test('findCva does not misread a division as a regex literal', () => {
+  const source = `const half = a / 2; const v = cva("x", {});`;
+  const span = findCva(source)!;
+  assert.equal(source.slice(span.start, span.start + 4), 'cva(');
+  const spec = parseCva(source, span);
+  assert.deepEqual(spec.base, ['x']);
+});
+
+test('findCva handles a regex literal with a character class before the real call', () => {
+  const source = `/["']/;\nconst v = cva("real", {});`;
+  const span = findCva(source)!;
+  assert.equal(source.slice(span.start, span.start + 4), 'cva(');
+  const spec = parseCva(source, span);
+  assert.deepEqual(spec.base, ['real']);
+});

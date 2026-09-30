@@ -4,7 +4,7 @@
 // construct that broke it (see `Construct` below).
 import type { CvaSpec } from '../types.ts';
 
-type Construct = 'template interpolation' | 'spread' | 'identifier reference' | 'function call' | 'computed key' | 'unexpected token';
+type Construct = 'template interpolation' | 'spread' | 'identifier reference' | 'function call' | 'computed key' | 'unknown option' | 'unexpected token';
 
 /** Thrown when a `cva()` call uses a construct outside the supported grammar. */
 export class CvaParseError extends Error {
@@ -19,11 +19,12 @@ export class CvaParseError extends Error {
 const IDENT_CHAR = /[A-Za-z0-9_$]/;
 
 // ---- Scanner: locate the first `cva( … )` call span without a real parser --------------------
-// Walks the source once, skipping line/block comments and string/template literals (template
+// Walks the source once, skipping line/block comments, string/template literals (template
 // literals recurse into `${ … }` interpolations so nested braces/strings/templates inside them
-// don't confuse the scan) so that a `cva(` occurring inside any of those is never mistaken for a
-// real call. Once a real `cva(` is found, the same skip logic is reused to walk forward with a
-// paren-depth counter to the matching `)`.
+// don't confuse the scan), and regex literals (so a stray quote or `cva(`-looking text inside one
+// can't desync the scan either) so that a `cva(` occurring inside any of those is never mistaken
+// for a real call. Once a real `cva(` is found, the same skip logic is reused to walk forward
+// with a paren-depth counter to the matching `)`.
 
 function skipLineComment(source: string, i: number): number {
   const nl = source.indexOf('\n', i);
@@ -42,6 +43,55 @@ function skipQuoted(source: string, i: number): number {
   let j = i + 1;
   while (j < n && source[j] !== quote) { if (source[j] === '\\') j++; j++; }
   return j + 1;
+}
+
+// Regex-literal disambiguation: a bare `/` is ambiguous between "start of a regex literal" and
+// "division operator". We use the standard lexer heuristic — a `/` starts a regex when the last
+// non-whitespace code character before it is one of the listed punctuation marks, or the last
+// word before it is one of the listed keywords, or it's the start of the file; otherwise it's
+// division and left alone (falls through to a normal, un-skipped character).
+const REGEX_PRECEDING_PUNCT = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', ';']);
+const REGEX_PRECEDING_KEYWORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'yield', 'do', 'else']);
+
+/** Find the code token immediately preceding `i`, skipping whitespace, to disambiguate `/`. */
+function precedingToken(source: string, i: number): { kind: 'start' } | { kind: 'word'; word: string } | { kind: 'punct'; char: string } {
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(source[j])) j--;
+  if (j < 0) return { kind: 'start' };
+  if (IDENT_CHAR.test(source[j])) {
+    let start = j;
+    while (start > 0 && IDENT_CHAR.test(source[start - 1])) start--;
+    return { kind: 'word', word: source.slice(start, j + 1) };
+  }
+  return { kind: 'punct', char: source[j] };
+}
+
+function isRegexStart(source: string, i: number): boolean {
+  const token = precedingToken(source, i);
+  if (token.kind === 'start') return true;
+  if (token.kind === 'punct') return REGEX_PRECEDING_PUNCT.has(token.char);
+  return REGEX_PRECEDING_KEYWORDS.has(token.word);
+}
+
+/** Skip a regex literal starting at its leading `/`, honoring escapes and `[...]` character classes (where `/` doesn't close it), plus trailing flags. */
+function skipRegex(source: string, i: number): number {
+  const n = source.length;
+  let j = i + 1;
+  let inClass = false;
+  while (j < n) {
+    const c = source[j];
+    if (c === '\\') { j += 2; continue; }
+    if (c === '\n') return j; // unterminated regex literal: bail without consuming the newline
+    if (c === '[') { inClass = true; j++; continue; }
+    if (c === ']') { inClass = false; j++; continue; }
+    if (c === '/' && !inClass) {
+      j++;
+      while (j < n && /[A-Za-z]/.test(source[j])) j++; // flags
+      return j;
+    }
+    j++;
+  }
+  return n;
 }
 
 /** Skip a template literal starting at its opening backtick, recursing into `${ … }` interpolations. */
@@ -73,13 +123,14 @@ function skipInterpolation(source: string, i: number): number {
   return j;
 }
 
-/** If `i` starts a comment or a string/template literal, return the index right after it; else undefined. */
+/** If `i` starts a comment, a string/template literal, or a regex literal, return the index right after it; else undefined. */
 function skipNonCode(source: string, i: number): number | undefined {
   const c = source[i];
   if (c === '/' && source[i + 1] === '/') return skipLineComment(source, i);
   if (c === '/' && source[i + 1] === '*') return skipBlockComment(source, i);
   if (c === '"' || c === "'") return skipQuoted(source, i);
   if (c === '`') return skipTemplate(source, i);
+  if (c === '/' && isRegexStart(source, i)) return skipRegex(source, i);
   return undefined;
 }
 
@@ -132,8 +183,9 @@ type Value = string | boolean | number | Value[] | { [key: string]: Value };
  * either key; both are accepted and normalized into `classes`), and `defaultVariants` (object of
  * string | boolean literals). String literals: single or double quotes. Template literals without
  * `${…}` interpolation are accepted as plain strings. Anything else — an interpolated template, a
- * spread, an identifier other than `true`/`false`, a function call, a computed key, or any other
- * unrecognized token — throws `CvaParseError` naming the construct.
+ * spread, an identifier other than `true`/`false`, a function call, a computed key, an unknown
+ * top-level key on the options object, or any other unrecognized token — throws `CvaParseError`
+ * naming the construct.
  */
 export function parseCva(source: string, span: { start: number; end: number }): CvaSpec {
   let pos = span.start;
@@ -339,6 +391,9 @@ export function parseCva(source: string, span: { start: number; end: number }): 
     if (at() !== ')') {
       if (at() !== '{') fail('unexpected token');
       options = parseObject();
+      for (const key of Object.keys(options)) {
+        if (key !== 'variants' && key !== 'compoundVariants' && key !== 'defaultVariants') fail('unknown option');
+      }
       skipTrivia();
       if (at() === ',') { pos++; skipTrivia(); }
     }
