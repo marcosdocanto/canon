@@ -49,3 +49,9 @@ test('tailwind-arbitrary-color does not flag non-color arbitrary values', () => 
   const colorViolations = violations.filter(v => v.rule === 'tailwind-arbitrary-color');
   assert.equal(colorViolations.length, 0);
 });
+
+test('no duplicate violations for hex color arbitrary values', () => {
+  const violations = lintSource(known, 'Test.tsx', '<button className="bg-[#7c3aed]" />');
+  assert.equal(violations.length, 1, 'exactly one total violation');
+  assert.equal(violations[0].rule, 'tailwind-arbitrary-color', 'violation is from tailwind-arbitrary-color rule');
+});

@@ -317,8 +317,8 @@ export function lintSource(known: Known, file: string, content: string, opts: { 
       for (const m of span.text.matchAll(/(?<![\w-])(?:bg|text|border|ring|fill|stroke|shadow|outline|decoration|accent|caret|from|via|to)-\[(#[0-9a-fA-F]{3,8}|rgba?\([^\]]*\)|hsla?\([^\]]*\)|oklch\([^\]]*\)|color\([^\]]*\))\]/g)) {
         push(span.start + m.index!, 'tailwind-arbitrary-color', 'error', 'arbitrary color value bypasses the theme', nearestColor(known, m[1]));
       }
-      for (const m of span.text.matchAll(/(?<![\w-])[a-z-]+-\[(#[0-9a-fA-F]{3,8}|-?\d+(?:\.\d+)?(?:px|rem|em)|rgba?\([^\]]*\)|hsla?\([^\]]*\))\]/g)) {
-        push(span.start + m.index!, 'tailwind-arbitrary', 'error', 'Arbitrary value ' + m[0], /#|rgb|hsl/.test(m[1]) ? nearestColor(known, m[1]) : 'use a scale utility (p-3, gap-4, text-sm…)');
+      for (const m of span.text.matchAll(/(?<![\w-])[a-z-]+-\[(-?\d+(?:\.\d+)?(?:px|rem|em))\]/g)) {
+        push(span.start + m.index!, 'tailwind-arbitrary', 'error', 'Arbitrary value ' + m[0], 'use a scale utility (p-3, gap-4, text-sm…)');
       }
       for (const m of span.text.matchAll(/(?<![\w-])(text|leading|tracking|p[xytrbl]?|m[xytrbl]?|gap|rounded|w|h|top|left|right|bottom|inset|space-[xy])-\[[^\]]+\]/g)) {
         if (!/#|rgb|hsl|px|rem|em/.test(m[0])) push(span.start + m.index!, 'tailwind-arbitrary', 'error', 'Arbitrary value ' + m[0], 'use a scale utility');
