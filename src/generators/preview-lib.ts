@@ -196,7 +196,8 @@ const SEMANTIC_FALLBACKS: Record<string, string> = {
  */
 const COMPOSE_ROLES = ['Header', 'Title', 'Description', 'Action', 'Content', 'Footer'] as const;
 const ROLE_TEXT: Record<string, string> = {
-  Title: 'Card title', Description: 'Supporting description text for this component.',
+  Title: '', // filled per component: "<Name> title"
+  Description: 'Supporting description text for this component.',
   Content: 'Body content goes here — the real classes of every part are applied.',
   Footer: 'Footer', Action: 'Action',
 };
@@ -224,8 +225,17 @@ function composedMarkup(componentName: string, parts: PartInfo[]): string | unde
     const role = COMPOSE_ROLES.find((r) => part.name === componentName + r);
     if (role && !byRole.has(role)) byRole.set(role, part);
   }
+  // Overlay-style components (Dialog, Drawer, AlertDialog…) have no styled root — their panel IS
+  // the Content part. Promote it to root so they still compose into one readable example.
+  if (!root && byRole.has('Content')) {
+    root = byRole.get('Content');
+    byRole.delete('Content');
+  }
   // A composition is only clearer than tiles when there's a styled root AND ≥2 styled roles.
   if (!root || byRole.size < 2) return undefined;
+  // Only the parts ACTUALLY absorbed leave the tile/read-only list — never assume the component's
+  // own name was one of them (a read-only root alias must keep its place in the summary line).
+  const consumedNames = [root.name, ...[...byRole.values()].map((p) => p.name)];
 
   const div = (part: PartInfo, text: string, children = '') =>
     `<div data-slot="${escapeHtml(slotNameOf(part.name))}" class="${escapeHtml(part.classes!)}">${children || escapeHtml(text)}</div>`;
@@ -233,15 +243,18 @@ function composedMarkup(componentName: string, parts: PartInfo[]): string | unde
   const header = byRole.get('Header');
   const headerChildren = [byRole.get('Title'), byRole.get('Description'), byRole.get('Action')]
     .filter((p): p is PartInfo => Boolean(p))
-    .map((p) => div(p, ROLE_TEXT[p.name.replace(componentName, '')] ?? p.name))
+    .map((p) => {
+      const role = p.name.replace(componentName, '');
+      const text = role === 'Title' ? `${componentName} title` : (ROLE_TEXT[role] || p.name);
+      return div(p, text);
+    })
     .join('');
   const pieces = [
     header ? div(header, '', headerChildren || escapeHtml('Header')) : '',
     byRole.has('Content') ? div(byRole.get('Content')!, ROLE_TEXT.Content) : '',
     byRole.has('Footer') ? div(byRole.get('Footer')!, ROLE_TEXT.Footer) : '',
   ].join('');
-  const composedNames = [componentName, ...[...byRole.keys()].map((r) => componentName + r)];
-  return `<figure class="cn-lib-composed" data-composed="${escapeHtml(composedNames.join(' '))}"><figcaption>${escapeHtml(componentName)} — assembled</figcaption>${div(root, '', pieces)}</figure>`;
+  return `<figure class="cn-lib-composed" data-composed="${escapeHtml(consumedNames.join(' '))}"><figcaption>${escapeHtml(componentName)} — assembled</figcaption>${div(root, '', pieces)}</figure>`;
 }
 
 /**
@@ -502,6 +515,20 @@ body {
   ${CARD_CONTAINMENT_CSS}
 }
 .cn-lib-composed > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }
+/* Overlay-panel roots (DialogContent etc.) carry fixed/centering/animation classes meant for a
+   portal — inside the composition they must sit in normal flow at full visibility, or the whole
+   assembled example collapses to slivers. Same neutralization as part tiles, one level deep. */
+.cn-lib-composed > div, .cn-lib-composed > div * {
+  position: static !important;
+  inset: auto !important;
+  transform: none !important;
+  translate: none !important;
+  scale: none !important;
+  rotate: none !important;
+  animation: none !important;
+  opacity: 1 !important;
+}
+.cn-lib-composed > div { width: 100%; }
 .cn-lib-part-readonly, .cn-lib-part-note { margin: 0; font-size: 12px; color: ${CHROME_MUTED}; overflow-wrap: anywhere; }
 /* One muted summary line replacing a whole stack of per-part "Name: reason" lines (see
    readOnlyPartsSummaryMarkup) — every part's name still reaches the user via the native title

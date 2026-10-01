@@ -294,9 +294,12 @@ test('previewHtml renders a pure-parts component (no cva): styled parts as real 
   const section = /<section[^>]*data-slug="dialog"[\s\S]*?<\/section>/.exec(html)?.[0];
   assert.ok(section, 'expected a dialog section');
 
+  // Dialog composes: its Content part is promoted to the assembled example's root, carrying its
+  // real classes; the remaining styled parts render inside that composition or as tiles.
   const content = dialogPart('DialogContent');
   assert.ok(content.classes);
-  assert.ok(section!.includes(`<figcaption>DialogContent</figcaption><div class="${content.classes}">DialogContent</div>`));
+  assert.match(section!, /cn-lib-composed/, 'an overlay component with Content+roles composes into one assembled example');
+  assert.ok(section!.includes(`class="${content.classes}"`), "the composition's root carries DialogContent's real classes");
 
   assert.doesNotMatch(section!, /no static styles found/, 'a component with at least one styled part must never show the placeholder');
   assert.doesNotMatch(section!, /behavior component/);
@@ -306,14 +309,22 @@ test('previewHtml applies the small semantic-tag heuristic: Title -> h3-ish, Des
   const dialogInfo: ComponentInfo = { slug: 'dialog', file: '/fake/project/src/ui/dialog.tsx', exportName: 'Dialog', importPath: '~/ui/dialog', parts: dialogParts };
   const html = previewHtml(theme, [{ info: dialogInfo, examples: [] }]);
 
+  // Dialog's Title/Description/Footer are absorbed into the composed example (divs with their
+  // real classes); the semantic-tag heuristic still applies to parts rendered as standalone
+  // tiles — pin it with a non-composing fixture instead.
   const title = dialogPart('DialogTitle');
-  assert.match(html, new RegExp(`<h3 class="${escapeRegExp(title.classes!)}">DialogTitle</h3>`));
+  assert.ok(html.includes(`class="${title.classes}"`), "DialogTitle's classes render inside the composition");
 
-  const description = dialogPart('DialogDescription');
-  assert.match(html, new RegExp(`<p class="${escapeRegExp(description.classes!)}">DialogDescription</p>`));
-
-  const footer = dialogPart('DialogFooter'); // no "title"/"description" in the name -> plain div
-  assert.match(html, new RegExp(`<div class="${escapeRegExp(footer.classes!)}">DialogFooter</div>`));
+  const soloParts: PartInfo[] = [
+    { name: 'PanelTitle', classes: 'text-lg font-semibold', span: { start: 0, end: 0 } },
+    { name: 'PanelDescription', classes: 'text-sm text-muted-foreground', span: { start: 0, end: 0 } },
+    { name: 'PanelRow', classes: 'flex gap-2', span: { start: 0, end: 0 } },
+  ];
+  const soloInfo: ComponentInfo = { slug: 'panel', file: '/fake/project/src/ui/panel.tsx', exportName: 'Panel', importPath: '~/ui/panel', parts: soloParts };
+  const soloHtml = previewHtml(theme, [{ info: soloInfo, examples: [] }]);
+  assert.match(soloHtml, /<h3 class="text-lg font-semibold">PanelTitle<\/h3>/);
+  assert.match(soloHtml, /<p class="text-sm text-muted-foreground">PanelDescription<\/p>/);
+  assert.match(soloHtml, /<div class="flex gap-2">PanelRow<\/div>/);
 });
 
 test('previewHtml collapses a component\'s read-only parts into one muted summary line, with every name — never the (near-identical, repetitive) reason — in its title tooltip', () => {
