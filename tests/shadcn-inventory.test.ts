@@ -264,3 +264,15 @@ test('opaque selector preservation trusts fresh source, never client-supplied co
   spec.base.push("after:content-['new']");
   assert.throws(() => writeVariants({ ...button, cva: spec }, spec), /unsafe class string/);
 });
+
+test('writeVariants preserves empty variant class strings while editing another property', (t) => {
+  const root = clone(t);
+  const file = join(root,'src/ui/button.tsx');
+  writeFileSync(file, readFileSync(file,'utf8').replace('bg-primary text-primary-foreground shadow hover:bg-primary/90', ''));
+  const button = inventory(root).find(c => c.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.base.push('rounded-none');
+  const written = writeVariants(button,spec);
+  assert.match(written.content.toString(),/rounded-none/);
+  assert.match(written.content.toString(),/default:\s*""/);
+});

@@ -10,7 +10,7 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 assert.equal(pkg.private, undefined, 'The public package cannot be private');
 assert.equal(pkg.publishConfig?.access, 'public');
 assert.ok(pkg.repository?.url && pkg.homepage && pkg.bugs?.url, 'Public package links are required');
-assert.deepEqual(pkg.dependencies ?? {}, {}, 'Canon must keep zero runtime dependencies');
+assert.deepEqual(Object.keys(pkg.dependencies ?? {}), ['esbuild'], 'Only the browser preview compiler is a runtime dependency');
 const temporary = mkdtempSync(join(tmpdir(), 'canon-release-check-'));
 try {
   const result = spawnSync('npm', ['pack', '--json', '--pack-destination', temporary], { cwd: root, encoding: 'utf8' });

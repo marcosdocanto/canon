@@ -6,7 +6,7 @@ import type { Write } from '../../design-files.ts';
 import type { ComponentInfo, CvaSpec, PartInfo } from '../types.ts';
 import { readConfig } from './config.ts';
 import { CvaParseError, findCva, parseCva, spliceCva } from './cva.ts';
-import { parseParts, splicePart } from './parts.ts';
+import { cvaOwner, parseParts, splicePart } from './parts.ts';
 
 const LIST_EXPORT = /export\s*\{([^}]*)\}/g;
 const DECL_EXPORT = /export\s+(?:function\*?|class|const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
@@ -74,7 +74,7 @@ function validateClassList(classes: string[], where: string, original: string[] 
   // client's inventory. Parts never use this allowance because their splicer preserves quotes.
   const preserved = new Set(original.flatMap((value) => value.split(' ')).filter((token) => token && !SAFE_CLASS_LIST.test(token)));
   for (const cls of classes) {
-    if (!SAFE_CLASS_LIST.test(cls) && !cls.split(' ').every((token) => SAFE_CLASS_LIST.test(token) || preserved.has(token))) throw new Error(`shadcn adapter: ${where} has an unsafe class string: ${JSON.stringify(cls)}`);
+    if (cls !== "" && !SAFE_CLASS_LIST.test(cls) && !cls.split(' ').every((token) => SAFE_CLASS_LIST.test(token) || preserved.has(token))) throw new Error(`shadcn adapter: ${where} has an unsafe class string: ${JSON.stringify(cls)}`);
   }
 }
 
@@ -213,6 +213,7 @@ export function inventory(root: string): ComponentInfo[] {
     const span = findCva(source);
     if (span) {
       info.cvaSpan = span;
+      info.cvaOwner = cvaOwner(source, span);
       try {
         const spec = parseCva(source, span);
         const unsafeKey = unsafeVariantKey(spec);

@@ -43,7 +43,7 @@ test('the installed npm tarball runs the CLI and builds all runtime assets witho
     const mcp = JSON.parse(readFileSync(join(consumer, '.mcp.json'), 'utf8'));
     assert.ok(existsSync(mcp.mcpServers.canon.args[0]), 'installed integrations must reference the packaged CLI');
     const pkg = JSON.parse(readFileSync(join(consumer, 'node_modules', 'canon-ds', 'package.json'), 'utf8'));
-    assert.deepEqual(pkg.dependencies ?? {}, {}, 'published runtime must remain dependency-free');
+    assert.deepEqual(pkg.dependencies, { esbuild: '0.28.2' }, 'the real component compiler is the only runtime dependency');
     const runtime = join(consumer, 'node_modules', 'canon-ds');
     assert.match(readFileSync(join(runtime, 'LICENSE'), 'utf8'), /MIT License/);
     assert.match(readFileSync(join(runtime, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /Lucide/);

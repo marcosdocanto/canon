@@ -10,6 +10,7 @@ import { getAdapter } from './adapters/index.ts';
 import type { Adapter, ComponentInfo, CvaSpec, LibraryTheme, PartInfo } from './adapters/types.ts';
 import { HttpError, installFiles, record, requireValue, type Write } from './design-files.ts';
 import { buildLibWrites } from './build-lib.ts';
+import { realComponentPreview } from './generators/react-preview.ts';
 import { previewHtml } from './generators/preview-lib.ts';
 import { semanticClasses } from './generators/agents-lib.ts';
 import { checkRequest, decodePath, json, readBody, reportError, serveStatic } from './serve-shared.ts';
@@ -93,13 +94,14 @@ function draftTheme(value: unknown): LibraryTheme {
 /** Preview drafts use the same validated shapes as Save, but never install files. */
 function previewBody(value: unknown) {
   const body = record(value, 'Preview body');
-  for (const key of Object.keys(body)) requireValue(['theme', 'components', 'parts', 'page'].includes(key), `Unknown preview field: ${key}`);
+  for (const key of Object.keys(body)) requireValue(['theme', 'components', 'parts', 'page', 'selected'].includes(key), `Unknown preview field: ${key}`);
   requireValue('theme' in body, 'Preview body requires a theme field');
   const page = body.page ?? 'components';
   requireValue(['dashboard', 'settings', 'components'].includes(page as string), 'Unknown preview page');
+  if (body.selected !== undefined) requireValue(typeof body.selected === 'string', 'selected must be a component slug');
   const components: Record<string, CvaSpec> = Object.create(null);
   if (body.components !== undefined) for (const [slug, spec] of Object.entries(record(body.components, 'components'))) components[slug] = draftCvaSpec(spec, `components.${slug}`);
-  return { theme: draftTheme(body.theme), components, parts: body.parts === undefined ? {} : draftParts(body.parts), page: page as 'dashboard' | 'settings' | 'components' };
+  return { selected: body.selected as string | undefined, theme: draftTheme(body.theme), components, parts: body.parts === undefined ? {} : draftParts(body.parts), page: page as 'dashboard' | 'settings' | 'components' };
 }
 
 function previewInventory(inventory: ComponentInfo[], draft: ReturnType<typeof previewBody>): ComponentInfo[] {
@@ -269,7 +271,9 @@ export function libHandler(root: string, adapterId: string, designDir: string): 
         const components = draft ? previewInventory(inventory, draft) : inventory;
         const diskTheme = adapter.readTheme(root);
         const theme = draft ? { ...draft.theme, utilityTheme: diskTheme.utilityTheme, baseCss: diskTheme.baseCss } : diskTheme;
-        const html = previewHtml(theme, components.map((info) => ({ info, examples: adapter.renderSpec(info) })), draft?.page);
+        const html = draft?.page === 'components' && draft.selected !== undefined
+          ? await realComponentPreview(root, adapter, inventory, theme, draft.selected, draft)
+          : previewHtml(theme, components.map((info) => ({ info, examples: adapter.renderSpec(info) })), draft?.page);
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         res.end(html);
         return;

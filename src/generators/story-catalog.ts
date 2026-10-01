@@ -80,7 +80,57 @@ export function exclusionReason(component: ComponentInfo, root: string): string 
   return undefined;
 }
 
+/** Keep overlays interactive and closed initially so a gallery does not immediately cover the
+ *  other examples or trap keyboard focus. Each family uses its real trigger and close controls. */
+function overlayExample(c: ComponentInfo, ctx: Ctx, family: string, title: string): CatalogResult | undefined {
+  const required = [family, `${family}Trigger`, `${family}Content`, `${family}Header`, `${family}Title`, `${family}Description`, `${family}Footer`];
+  const alert = family === 'AlertDialog';
+  const closing = alert ? [`${family}Cancel`, `${family}Action`] : [`${family}Close`];
+  if (!hasAll(c, [...required, ...closing])) return undefined;
+  const trigger = buttonTrigger(ctx, title);
+  const done = buttonTrigger(ctx, 'Done', 'default');
+  const controls = alert
+    ? `<AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction>Archive project</AlertDialogAction>`
+    : `<${family}Close asChild>${done.jsx}</${family}Close>`;
+  return {
+    ownNames: [...required, ...closing], imports: trigger.imports,
+    jsx: `<${family}>
+      <${family}Trigger asChild>${trigger.jsx}</${family}Trigger>
+      <${family}Content>
+        <${family}Header><${family}Title>${title}</${family}Title><${family}Description>${alert ? 'The project will be moved to your archive. You can restore it later.' : 'Review the details for your workspace.'}</${family}Description></${family}Header>
+        <${family}Footer>${controls}</${family}Footer>
+      </${family}Content>
+    </${family}>`,
+  };
+}
+
 const CATALOG: Record<string, CatalogBuilder> = {
+  card: (c, ctx) => {
+    if (!hasAll(c, ['Card', 'CardHeader', 'CardTitle', 'CardDescription', 'CardContent', 'CardFooter'])) return undefined;
+    const action = buttonTrigger(ctx, 'Create project', 'default');
+    return {
+      ownNames: ['CardHeader', 'CardTitle', 'CardDescription', 'CardContent', 'CardFooter'],
+      imports: action.imports,
+      jsx: `<Card className="w-full max-w-sm">
+        <CardHeader><CardTitle>New project</CardTitle><CardDescription>Start a shared space for your team.</CardDescription></CardHeader>
+        <CardContent><p>Keep your designs, discussions, and deliverables together.</p></CardContent>
+        <CardFooter>${action.jsx}</CardFooter>
+      </Card>`,
+    };
+  },
+
+  alert: (c) => {
+    if (!hasAll(c, ['Alert', 'AlertTitle', 'AlertDescription'])) return undefined;
+    return { ownNames: ['AlertTitle', 'AlertDescription'], jsx: `<Alert className="w-full max-w-md"><AlertTitle>Changes saved</AlertTitle><AlertDescription>Your team can now see the latest version of this project.</AlertDescription></Alert>` };
+  },
+
+  calendar: (c) => ({ ownNames: [], jsx: `<Calendar mode="single" defaultMonth={new Date(2026, 9, 1)} className="rounded-lg border" />` }),
+
+  dialog: (c, ctx) => overlayExample(c, ctx, 'Dialog', 'Edit profile'),
+  'alert-dialog': (c, ctx) => overlayExample(c, ctx, 'AlertDialog', 'Archive project'),
+  sheet: (c, ctx) => overlayExample(c, ctx, 'Sheet', 'Project settings'),
+  drawer: (c, ctx) => overlayExample(c, ctx, 'Drawer', 'Weekly goal'),
+
   accordion: (c) => {
     if (!hasAll(c, ['AccordionItem', 'AccordionTrigger', 'AccordionContent'])) return undefined;
     return {
@@ -463,10 +513,12 @@ const CATALOG: Record<string, CatalogBuilder> = {
 
   resizable: (c) => {
     if (!hasAll(c, ['ResizablePanelGroup', 'ResizablePanel', 'ResizableHandle'])) return undefined;
+    const source = existsSync(c.file) ? readFileSync(c.file, 'utf8') : '';
+    const orientationProp = /\bResizablePrimitive\.Group\b/.test(source) ? 'orientation' : 'direction';
     return {
       ownNames: ['ResizablePanelGroup', 'ResizablePanel', 'ResizableHandle'],
       jsx: [
-        `<ResizablePanelGroup direction="horizontal" style={{ height: 160, width: 320 }} className="rounded-lg border">`,
+        `<ResizablePanelGroup ${orientationProp}="horizontal" style={{ height: 160, width: 320 }} className="rounded-lg border">`,
         `  <ResizablePanel defaultSize={50}>`,
         `    <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>One</div>`,
         `  </ResizablePanel>`,
@@ -668,10 +720,10 @@ const CATALOG: Record<string, CatalogBuilder> = {
   },
 
   bubble: (c) => {
-    if (!hasAll(c, ['Bubble', 'BubbleContent'])) return undefined;
+    if (!hasAll(c, ['BubbleGroup', 'Bubble', 'BubbleContent'])) return undefined;
     return {
-      ownNames: ['Bubble', 'BubbleContent'],
-      jsx: `<BubbleGroup style={{ width: 280 }}>\n    <Bubble><BubbleContent>Hello! Glad to see this rendering correctly.</BubbleContent></Bubble>\n  </BubbleGroup>`,
+      ownNames: ['BubbleGroup', 'Bubble', 'BubbleContent'],
+      jsx: `<BubbleGroup className="w-full max-w-sm">\n    <Bubble variant="muted"><BubbleContent>Can you share the updated designs?</BubbleContent></Bubble>\n    <Bubble align="end"><BubbleContent>Of course — the new project is ready to review.</BubbleContent></Bubble>\n  </BubbleGroup>`,
     };
   },
 
@@ -803,5 +855,11 @@ const CATALOG: Record<string, CatalogBuilder> = {
  *  template's required parts aren't actually present) — the caller (stories.ts) falls back to the
  *  compound/generic path in that case. */
 export function catalogStory(component: ComponentInfo, root: string, lookup: Lookup): CatalogResult | undefined {
-  return CATALOG[component.slug]?.(component, { root, lookup });
+  const example = CATALOG[component.slug]?.(component, { root, lookup });
+  if (!example) return undefined;
+  const own = names(component);
+  const imported = new Set(example.imports?.flatMap((entry) => entry.names) ?? []);
+  const referenced = [...example.jsx.matchAll(/<([A-Z][A-Za-z0-9_]*)\b/g)].map((match) => match[1]);
+  if (referenced.some((name) => !own.has(name) && !imported.has(name))) return undefined;
+  return { ...example, ownNames: [...new Set([...example.ownNames, ...referenced.filter((name) => own.has(name) && name !== component.exportName)])] };
 }

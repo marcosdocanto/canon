@@ -738,6 +738,7 @@ function App() {
   const [state, setState] = useState(null),
     [draft, setDraft] = useState(null),
     [active, setActive] = useState("theme"),
+    [galleryTarget, setGalleryTarget] = useState("button"),
     [scope, setScope] = useState("base"),
     [search, setSearch] = useState(""),
     [page, setPage] = useState("dashboard"),
@@ -793,7 +794,9 @@ function App() {
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
   }, []);
-  function select(view, nextScope = "base") {
+  function select(view, nextScope = "base", fromCanvas = false) {
+    if (!fromCanvas && view !== "theme") setGalleryTarget(view);
+    if (view !== active && page === "components") scroll.current = 0;
     setActive(view);
     setScope(nextScope);
     setIssue(null);
@@ -833,7 +836,7 @@ function App() {
             method: "POST",
             headers: { "content-type": "application/json" },
             signal: controller.signal,
-            body: JSON.stringify({ ...draft, page }),
+            body: JSON.stringify({ ...draft, page, ...(page === "components" ? {selected: galleryTarget} : {}) }),
           });
           if (!r.ok)
             throw Error(
@@ -855,8 +858,14 @@ function App() {
             "Live draft · Click an element to edit shared styles",
           );
         } catch (e) {
-          if (e.name !== "AbortError" && v === version.current)
+          if (e.name !== "AbortError" && v === version.current) {
             setPreviewStatus(`Preview unavailable: ${e.message}`);
+            const message = String(e.message).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+            const url = URL.createObjectURL(new Blob([`<html><body style="font:14px system-ui;padding:32px"><h2>Preview could not load</h2><p role="alert">${message}</p></body></html>`], {type:"text/html"}));
+            if (blob.current) URL.revokeObjectURL(blob.current);
+            blob.current = url;
+            setSrc(url);
+          }
         }
       }, 100);
     }
@@ -864,7 +873,7 @@ function App() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [draft, page, mode, mode === "storybook" ? active : null, storybook]);
+  }, [draft, page, mode, mode === "storybook" ? active : null, page === "components" ? galleryTarget : null, storybook]);
   function frameLoaded() {
     if (mode !== "draft") return;
     try {
@@ -878,7 +887,7 @@ function App() {
         const slug =
           target.dataset.inspect ?? target.closest("[data-slug]")?.dataset.slug;
         if (!state.components.some((c) => c.slug === slug)) return;
-        e.preventDefault();
+        if (page !== "components" || e.target.closest("a[href]")) e.preventDefault();
         let next = target.dataset.part ? `part:${target.dataset.part}` : "base";
         try {
           const picks = JSON.parse(target.dataset.picks);
@@ -887,7 +896,7 @@ function App() {
             Object.keys(picks)[0];
           if (axis) next = `variant:${axis}:${picks[axis]}`;
         } catch {}
-        select(slug, next);
+        select(slug, next, true);
       });
     } catch {}
   }

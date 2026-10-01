@@ -50,7 +50,7 @@ Screen layout, routes and application behavior remain agent work; Save does not 
 
 To use Canon styling with an existing component library, run `canon init <name> --lib shadcn [--preset <preset>]` or `canon adopt` to adopt an existing library. Canon applies its styling on top of your components; in library mode, `canon studio` opens the library editor instead.
 
-Choose an **Overview**, **Settings**, or **Components** example in the canvas. **Live draft** renders example HTML with your library's shared component classes and theme variables: unsaved changes update every matching instance immediately. It preserves the theme file's utility mappings and base layer, but does not execute React behavior or imported stylesheet plugins. If Storybook is running on port 6006, **Saved React** shows the real saved components separately.
+Choose an **Overview**, **Settings**, or **Components** example in the canvas. In **Components**, **Live draft** renders the selected component from your project's actual React source with a complete example. Unsaved variant and part edits compile in memory; only Save writes source files. Unsupported examples and rendering failures appear explicitly in the canvas. **Overview** and **Settings** remain HTML style previews using shared classes and theme variables. The preview preserves utility mappings and base styles and supports shadcn state variants. If Storybook is running on port 6006, **Saved React** shows the saved stories separately.
 
 Click an element to inspect its component and variant or part. The inspector edits one style scope at a time: base styles, a variant value, defaults, or an exported part such as `CardTitle`. Theme controls edit CSS variables; extra chart and sidebar colors are collapsed. Search the library, switch desktop/mobile canvas widths, or **Reset draft** to discard unsaved changes. The selected example stays in place while inspecting and editing.
 
@@ -128,9 +128,9 @@ A build with `--only` selects optional generators while still generating CSS. Ru
 
 ## Local CLI reference
 
-The compiler and CLI have zero runtime dependencies and require Node.js **22.18.0 or newer**. A source checkout uses Node's native TypeScript support; packaged versions run compiled JavaScript.
+The CLI uses esbuild to compile real library components for the live React preview and requires Node.js **22.18.0 or newer**. Installing an archived package also requires its declared compiler dependencies; offline reinstallation requires those dependencies in the npm cache. A source checkout uses Node's native TypeScript support; packaged versions run compiled JavaScript.
 
-The Studio serves the connection procedure at `./CONNECT.md`, the saved snapshot at `./api/system` and an installable package at `./canon-package.tgz`. The public website exposes those files too. Registry releases use `canon-ds`; a retained archive also supports installations without registry access. A localhost URL works for an agent on the same computer. If the agent runs elsewhere, use the public URL or an address it can reach.
+The Studio serves the connection procedure at `./CONNECT.md`, the saved snapshot at `./api/system` and an installable package at `./canon-package.tgz`. The public website exposes those files too. Registry releases use `canon-ds`; a retained archive avoids requiring the Studio during installation, while compiler dependencies must be available from the registry or npm cache. A localhost URL works for an agent on the same computer. If the agent runs elsewhere, use the public URL or an address it can reach.
 
 From a source checkout, invoke `node bin/canon.js` directly, or create a short command once:
 
@@ -164,6 +164,6 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-`npm run test:ci` typechecks the source and runs both suites. `npm run build` prepares the compiled `lib/` runtime; `npm pack` runs it automatically. The packaging tests install the tarball in a temporary consumer and exercise the CLI without runtime dependencies.
+`npm run test:ci` typechecks the source and runs both suites. `npm run build` prepares the compiled `lib/` runtime; `npm pack` runs it automatically. The packaging tests install the tarball in a temporary consumer and exercise the packaged CLI.
 
 </details>

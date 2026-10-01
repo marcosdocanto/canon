@@ -631,3 +631,23 @@ export function splicePart(source: string, part: PartInfo, classes: string): str
   const quote = source[start];
   return source.slice(0, start) + quote + classes + quote + source.slice(end);
 }
+
+/** Locate the exported component that calls the first CVA binding. Ambiguous ownership is
+ * left unknown rather than assigning a wrapper or a second CVA helper to the first spec. */
+export function cvaOwner(source: string, span: {start:number;end:number}): string | undefined {
+  const binding = source.slice(0,span.start).match(/\b(?:const|let|var)\s+([\w$]+)\s*=\s*$/)?.[1];
+  if (!binding) return undefined;
+  const owners = componentWindows(source).filter(({start,end}) => {
+    for (let i=start;i<end;i++) {
+      const skipped=skipNonCode(source,i);
+      if(skipped!==undefined){i=skipped-1;continue;}
+      if(i>=span.start && i<span.end){i=span.end-1;continue;}
+      if(source.startsWith(binding,i) && !IDENT_CHAR.test(source[i-1]??'') && !IDENT_CHAR.test(source[i+binding.length]??'')) {
+        const after=skipWsAndComments(source,i+binding.length,end);
+        if(source[after]==='(') return true;
+      }
+    }
+    return false;
+  });
+  return owners.length===1 ? owners[0].name : undefined;
+}

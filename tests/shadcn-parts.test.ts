@@ -537,3 +537,10 @@ test('a static native wrapper records its direct styled child for preview withou
   assert.deepEqual(part.previewChild, { wrapperTag: 'div', tag: 'table', classes: 'w-full text-sm' });
   assert.equal(source.slice(part.span!.start, part.span!.end), '"relative w-full overflow-x-auto"');
 });
+
+test('first CVA owner is the consuming export, not an earlier wrapper or another variants helper', async () => {
+  const { cvaOwner } = await import('../src/adapters/shadcn/parts.ts');
+  const source = `function BubbleGroup(){return <div/>} const bubbleVariants=cva('',{}); function Bubble(){return <div className={bubbleVariants({})}/>} const reactionVariants=cva('',{}); function BubbleReactions(){return <div className={reactionVariants({})}/>} export {BubbleGroup,Bubble,BubbleReactions};`;
+  assert.equal(cvaOwner(source,findCva(source)!), 'Bubble');
+  assert.equal(cvaOwner(`// fakeVariants()\n${source}`,findCva(`// fakeVariants()\n${source}`)!), 'Bubble');
+});

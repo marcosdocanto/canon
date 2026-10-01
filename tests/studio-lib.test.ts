@@ -6,8 +6,8 @@ import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, symlinkSync, mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { chromium, type Page } from 'playwright';
 import { adopt } from '../src/adopt.ts';
 import { clone } from './fixtures/clone.ts';
@@ -47,8 +47,9 @@ async function bootServe(t: TestContext, dist: string, design: string, projectRo
  * tests/serve-lib.test.ts's libFixture), boot its Studio, and open the bundled editor in a real
  * browser page.
  */
-async function libStudio(t: TestContext) {
+async function libStudio(t: TestContext, prepare?: (root: string) => void) {
   const root = clone(t);
+  prepare?.(root);
   await adopt({ root, apply: true, hooks: false });
   const design = join(root, 'design');
   const dist = join(design, 'dist');
@@ -380,4 +381,30 @@ test('keyboard controls edit a shared radius and color popover returns focus; mo
   await page.locator('.le-comp-item[data-slug="button"]').click();
   assert.equal(await page.locator('#le-editor-title').innerText(), 'Button');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+});
+
+test('real gallery preserves component interaction and its composition while inspecting nested controls', async t => {
+  const { page, root, buttonFile } = await libStudio(t, (root) => {
+    symlinkSync(resolve('node_modules'), join(root, 'node_modules'));
+    mkdirSync(join(root,'src/lib'),{recursive:true});
+    writeFileSync(join(root,'src/lib/utils.ts'), `export function cn(...values){return values.filter(Boolean).join(' ')}`);
+    const button = join(root, 'src/ui/button.tsx');
+    writeFileSync(button, readFileSync(button,'utf8').replace('<button\n', '<button\n        data-slot="button"\n        data-pressed={pressedCount}\n'));
+    writeFileSync(join(root,'src/ui/button-group.tsx'), `import React from 'react'; export function ButtonGroup({children}) { return <div data-slot="button-group" role="group" className="flex gap-2">{children}</div>; }`);
+  });
+  const before = readFileSync(buttonFile,'utf8');
+  await page.locator('.le-comp-item[data-slug="button-group"]').click();
+  await choose(page, '#le-example', 'Components');
+  const frame = page.frameLocator('#le-preview-frame');
+  await frame.locator('[data-react-gallery]').waitFor();
+  await frame.getByRole('button', {name:'Copy',exact:true}).click();
+  assert.equal(await frame.getByRole('button',{name:'Copy',exact:true}).getAttribute('data-pressed'),'1');
+  assert.equal(await frame.locator('h1').innerText(),'ButtonGroup');
+  assert.equal(await page.locator('#le-editor-title').innerText(),'Button');
+  assert.equal(await page.getByRole('combobox',{name:'Style scope'}).getAttribute('data-value'),'base');
+  const radius = page.getByRole('slider',{name:'Radius',exact:true});
+  await radius.focus(); await page.keyboard.press('Home');
+  await page.waitForFunction(() => [...document.querySelector('#le-preview-frame').contentDocument.querySelectorAll('[data-slot="button"]')].every(el => el.classList.contains('rounded-none')));
+  assert.equal(await frame.locator('h1').innerText(),'ButtonGroup');
+  assert.equal(readFileSync(buttonFile,'utf8'),before);
 });

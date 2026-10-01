@@ -11,7 +11,7 @@ export interface CvaSpec { base: string[]; variants: Record<string, Record<strin
 export interface PartInfo { previewChild?: { wrapperTag: string; tag: string; classes: string }; name: string; classes?: string; span?: { start: number; end: number } /* byte offsets of the literal, INCLUDING its quotes */; dynamicTail?: string; readOnlyReason?: string; note?: string /* non-blocking context, e.g. multiple conditional render branches each yield a literal and only the first is being edited */; }
 
 /** Inventory entry for a component from a library. */
-export interface ComponentInfo { slug: string; file: string; exportName: string; importPath: string; cva?: CvaSpec; cvaSpan?: { start: number; end: number }; readOnlyReason?: string; parts?: PartInfo[]; }
+export interface ComponentInfo { slug: string; file: string; exportName: string; importPath: string; cvaOwner?: string; cva?: CvaSpec; cvaSpan?: { start: number; end: number }; readOnlyReason?: string; parts?: PartInfo[]; }
 
 /** Example for rendering a component in the design system. */
 export interface RenderExample { title: string; jsx: string; }
