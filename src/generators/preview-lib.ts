@@ -316,10 +316,23 @@ body {
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
+  padding: 10px;
+  border: 1px dashed color-mix(in oklab, currentColor 18%, transparent);
+  border-radius: 8px;
   ${CARD_CONTAINMENT_CSS}
 }
 .cn-lib-part > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }
-.cn-lib-part-readonly, .cn-lib-part-note { margin: 0; font-size: 12px; color: ${CHROME_MUTED}; }`;
+/* The rendered sample keeps the part's REAL classes, but inside this tile it must behave:
+   no escaping its box (containment above), no absolute stacking over the caption, and long
+   single-word names must wrap instead of painting over the neighbor tile. */
+.cn-lib-part > :not(figcaption):not(.cn-lib-part-note) {
+  position: relative !important;
+  inset: auto !important;
+  transform: none !important;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.cn-lib-part-readonly, .cn-lib-part-note { margin: 0; font-size: 12px; color: ${CHROME_MUTED}; overflow-wrap: anywhere; }`;
 
 /**
  * Build the complete library-mode preview HTML document: a raw `:root`/`.dark` block with the

@@ -188,3 +188,8 @@ button { font: inherit; }
 .le-advanced { border-top: 1px dashed rgba(255,255,255,.12); padding-top: 6px; margin-top: 2px; }
 .le-advanced > summary { font-size: 11px; color: var(--le-muted, #9a9a9a); cursor: pointer; user-select: none; }
 .le-advanced[open] > summary { margin-bottom: 6px; }
+
+/* compact color control */
+.le-swatch--current { flex: none; width: 22px; height: 22px; }
+.le-prop-colorsel { flex: 1; min-width: 0; }
+.le-prop-color--compact { gap: 4px; }

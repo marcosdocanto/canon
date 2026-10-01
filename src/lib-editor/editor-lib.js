@@ -296,6 +296,22 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     activeView = view;
     saveIssue = null;
     renderRail(); renderEditorBody(); refreshChrome();
+    scrollPreviewTo(view);
+  }
+
+  // Clicking a component must SHOW that component: every preview section carries
+  // data-slug (preview-lib.ts), so scroll the iframe to it and flash a highlight.
+  function scrollPreviewTo(view) {
+    if (view === 'theme') return;
+    try {
+      const doc = $('#le-preview-frame').contentDocument;
+      const section = doc?.querySelector(`[data-slug="${CSS.escape(view)}"]`);
+      if (!section) return;
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      section.style.outline = '2px solid #e8b34c';
+      section.style.outlineOffset = '4px';
+      setTimeout(() => { section.style.outline = ''; section.style.outlineOffset = ''; }, 1600);
+    } catch { /* cross-origin or not yet loaded — harmless */ }
   }
 
   // ---------------------------------------------------------------- editor body
@@ -442,13 +458,23 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     return b;
   }
 
+  // Compact color control: current-value swatch + a named select of the project's theme colors
+  // (a wall of 33 anonymous swatches was unreadable) + a custom-value field and opacity.
   function colorControl(prop, apply) {
-    const box = el('div', { class: 'le-prop-color' });
-    const grid = el('div', { class: 'le-swatch-grid' });
-    for (const color of state.vocab?.colors ?? []) {
-      grid.append(colorSwatchButton(color, prop.kind === 'theme' && prop.value === color.name,
-        (name) => apply({ ...prop, kind: 'theme', value: name })));
-    }
+    const colors = state.vocab?.colors ?? [];
+    const current = prop.kind === 'theme' ? colors.find((c) => c.name === prop.value) : null;
+
+    const swatch = el('span', { class: 'le-swatch le-swatch--current', title: current?.name ?? prop.value });
+    swatch.style.background = current ? current.light : (prop.kind === 'raw' ? prop.value : 'transparent');
+
+    const select = el('select', { class: 'le-in le-in--sm le-prop-colorsel' },
+      el('option', { value: '', selected: prop.kind === 'raw' ? true : null }, prop.kind === 'raw' ? `custom: ${prop.value}` : 'custom…'),
+      ...colors.map((c) => el('option', { value: c.name, selected: prop.kind === 'theme' && prop.value === c.name ? true : null }, c.name)));
+    select.addEventListener('change', () => {
+      if (select.value) apply({ ...prop, kind: 'theme', value: select.value });
+      else custom.focus();
+    });
+
     const custom = el('input', {
       type: 'text', class: 'le-in le-in--sm le-prop-custom', spellcheck: 'false',
       placeholder: '#hex / oklch(…)', value: prop.kind === 'raw' ? prop.value : '',
@@ -458,13 +484,16 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
       const v = custom.value.trim();
       if (v) apply({ ...prop, kind: 'raw', value: v });
     });
+
     const opacity = el('input', {
       type: 'number', class: 'le-in le-in--sm le-prop-opacity', min: '0', max: '100', step: '5',
       placeholder: '100', value: prop.opacity ?? '', title: 'Opacity %',
     });
     opacity.addEventListener('change', () => apply({ ...prop, opacity: opacity.value || undefined }));
-    box.append(grid, el('div', { class: 'le-prop-color__row' }, custom, opacity));
-    return box;
+
+    return el('div', { class: 'le-prop-color le-prop-color--compact' },
+      el('div', { class: 'le-prop-color__row' }, swatch, select, opacity),
+      el('div', { class: 'le-prop-color__row' }, custom));
   }
 
   function scaleControl(prop, scale, apply, { slider = false } = {}) {
