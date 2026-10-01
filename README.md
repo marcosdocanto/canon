@@ -8,6 +8,8 @@ Canon is an open-source design system for apps built with coding agents. It prov
 
 [Documentation and connection prompt](https://marcosdocanto.github.io/canon/) · [Explore the Studio](https://marcosdocanto.github.io/canon/preview.html) · [Contribute](CONTRIBUTING.md)
 
+The Library Studio interface is built with React and shadcn/ui controls. Its JavaScript and Tailwind CSS are bundled with the CLI, so the editor works offline without adding runtime dependencies to your project. Studio chrome uses its own neutral theme; the preview uses your library’s editable theme.
+
 ## Connect your agent
 
 Paste this into your coding agent's conversation for a new or existing project:
@@ -48,9 +50,11 @@ Screen layout, routes and application behavior remain agent work; Save does not 
 
 To use Canon styling with an existing component library, run `canon init <name> --lib shadcn [--preset <preset>]` or `canon adopt` to adopt an existing library. Canon applies its styling on top of your components; in library mode, `canon studio` opens the library editor instead.
 
-The library editor has two tabs: **Theme** to define CSS variables with light and dark mode support, previewed against your repo's real component classes, and **Components** to edit CVA variant definitions for Canon-owned components (add or remove values, set defaults, adjust class lists); read-only components show why they cannot be edited.
+Choose an **Overview**, **Settings**, or **Components** example in the canvas. In **Components**, **Live draft** renders the selected component from your project's actual React source with a complete example. Unsaved variant and part edits compile in memory; only Save writes source files. Unsupported examples and rendering failures appear explicitly in the canvas. **Overview** and **Settings** remain HTML style previews using shared classes and theme variables. The preview preserves utility mappings and base styles and supports shadcn state variants. If Storybook is running on port 6006, **Saved React** shows the saved stories separately.
 
-Below a component's variants, a **Parts** section lists its exported subcomponents (e.g. Dialog's `DialogContent`, `DialogTitle`, `DialogTrigger`) — the pieces of a component that style themselves with a plain `className` string instead of a `cva()`. A part with a static class literal is editable with the same chip editor as variants (autocomplete, add/remove, unknown-class warnings); any dynamic portion of its className (a `cn(...)` call's other arguments) shows read-only alongside the chips, and a part rendered from more than one branch of its component notes which branch is being edited. A part with no static literal to find — an aliased primitive, or one built entirely from dynamic classes — shows its name and the reason, with nothing to edit.
+Click an element to inspect its component and variant or part. The inspector edits one style scope at a time: base styles, a variant value, defaults, or an exported part such as `CardTitle`. Theme controls edit CSS variables; extra chart and sidebar colors are collapsed. Search the library, switch desktop/mobile canvas widths, or **Reset draft** to discard unsaved changes. The selected example stays in place while inspecting and editing.
+
+**Save** writes the actual shared theme file, CVA definitions, and editable part class literals in your connected project. Apps importing those components receive the saved styles through their normal development reload or next build. Dynamic classes and behavior remain read-only; the inspector explains unsupported parts.
 
 Canon saves transactionally—theme files, CVA blocks and part class literals are rewritten in place with content outside Canon ownership unchanged, making concurrent application edits safe. A component file changed during editing triggers a 409 conflict and reload; reapply changes and save to continue. Canon owns CSS only (tokens, CVA, and now a part's own static className literal); application logic, markup and behavior remain yours. Use `canon lint` to check style violations, `canon check` to verify the build, or `canon storybook` to review components during editing.
 
@@ -124,9 +128,9 @@ A build with `--only` selects optional generators while still generating CSS. Ru
 
 ## Local CLI reference
 
-The compiler and CLI have zero runtime dependencies and require Node.js **22.18.0 or newer**. A source checkout uses Node's native TypeScript support; packaged versions run compiled JavaScript.
+The CLI uses esbuild to compile real library components for the live React preview and requires Node.js **22.18.0 or newer**. Installing an archived package also requires its declared compiler dependencies; offline reinstallation requires those dependencies in the npm cache. A source checkout uses Node's native TypeScript support; packaged versions run compiled JavaScript.
 
-The Studio serves the connection procedure at `./CONNECT.md`, the saved snapshot at `./api/system` and an installable package at `./canon-package.tgz`. The public website exposes those files too. Registry releases use `canon-ds`; a retained archive also supports installations without registry access. A localhost URL works for an agent on the same computer. If the agent runs elsewhere, use the public URL or an address it can reach.
+The Studio serves the connection procedure at `./CONNECT.md`, the saved snapshot at `./api/system` and an installable package at `./canon-package.tgz`. The public website exposes those files too. Registry releases use `canon-ds`; a retained archive avoids requiring the Studio during installation, while compiler dependencies must be available from the registry or npm cache. A localhost URL works for an agent on the same computer. If the agent runs elsewhere, use the public URL or an address it can reach.
 
 From a source checkout, invoke `node bin/canon.js` directly, or create a short command once:
 
@@ -160,6 +164,6 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-`npm run test:ci` typechecks the source and runs both suites. `npm run build` prepares the compiled `lib/` runtime; `npm pack` runs it automatically. The packaging tests install the tarball in a temporary consumer and exercise the CLI without runtime dependencies.
+`npm run test:ci` typechecks the source and runs both suites. `npm run build` prepares the compiled `lib/` runtime; `npm pack` runs it automatically. The packaging tests install the tarball in a temporary consumer and exercise the packaged CLI.
 
 </details>

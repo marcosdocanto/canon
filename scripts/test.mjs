@@ -1,3 +1,4 @@
+import './build-studio.mjs';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';

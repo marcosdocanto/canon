@@ -57,7 +57,7 @@ async function prepareArchive(): Promise<Buffer> {
       catch { throw new Error('Preparing a Canon checkout download requires its TypeScript development dependency. Install the Canon checkout dependencies first.'); }
       await mkdir(join(workspace, 'node_modules'), { recursive: true });
       await symlink(compiler, join(workspace, 'node_modules', 'typescript'), 'junction');
-      await run(process.execPath, [join(workspace, 'scripts', 'build.mjs')], workspace, temporary, 'Canon runtime compilation');
+      await run(process.execPath, [join(workspace, 'scripts', 'build.mjs'), '--runtime-only'], workspace, temporary, 'Canon runtime compilation');
       runtime = join(workspace, 'lib');
     }
 

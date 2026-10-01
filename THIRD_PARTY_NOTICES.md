@@ -81,3 +81,64 @@ SOFTWARE.
 The Studio requests selected fonts from Google Fonts. Font binaries are not bundled in the npm package; self-hosted copies retain their respective font licenses.
 
 Company names and logo representations in example components identify those companies. They are not covered by a grant of trademark rights from Canon and do not imply endorsement.
+
+## Vendored class merger
+
+Canon vendors the `cn` 0.4.0 runtime (`src/vendor/cn-0.4.0/{index,engine,tables}.js`, copied verbatim) to resolve Tailwind class conflicts in shared-style previews, without production package dependencies. Update these three files and the adjacent LICENSE together.
+
+Source: https://github.com/shadcn-ui/cn/tree/main/packages/cn
+Package: https://registry.npmjs.org/cn/-/cn-0.4.0.tgz
+
+MIT License
+
+Copyright (c) 2026 shadcn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## Library Studio: shadcn/ui
+
+The React controls in `studio/ui/` are adapted from shadcn/ui (Radix style), with neutral Studio tokens and accessible slider labels. Source: https://github.com/shadcn-ui/ui
+
+MIT License
+
+Copyright (c) 2023 shadcn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The offline Studio bundle includes React, React DOM, Radix primitives, Lucide, class-variance-authority, cn, and their supporting packages. Complete license texts are shipped in `lib/lib-editor/bundled-licenses.txt`; original source notices are retained in `app.js.LEGAL.txt`.
+
+The Studio also includes shadcn/ui’s custom Radix state variants (`studio/shadcn-variants.css`, under the shadcn MIT license above) and tw-animate-css styles. The complete tw-animate-css license is included in `lib/lib-editor/bundled-licenses.txt`.

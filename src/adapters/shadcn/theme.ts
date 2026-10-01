@@ -178,7 +178,21 @@ export function readTheme(root: string): LibraryTheme {
   for (const [name, value] of darkVars) {
     if (!(name in vars)) vars[name] = { light: value, dark: value };
   }
-  return { file: cssFile, vars };
+  // Read-only Tailwind mappings preserve the project's radius/font/spacing conventions.
+  const utilityTheme: Record<string, string> = {};
+  for (const block of topLevelBlocks(css)) {
+    if (!/^@theme(?:\s+inline)?$/.test(block.selector)) continue;
+    for (const match of stripComments(block.body).matchAll(VAR_DECL)) {
+      const value = match[2].trim();
+      if (!/[{}<>;]/.test(value)) utilityTheme[match[1]] = value;
+    }
+  }
+  const baseCss = topLevelBlocks(css).filter((block) => /^@layer\s+base$/.test(block.selector)).map((block) => {
+    // v3 themes put managed variables in this layer too: draft vars must remain authoritative.
+    const rules = topLevelBlocks(block.body).map((rule) => `${rule.selector} {${managedKind(rule.selector) ? rule.body.replace(VAR_DECL, '') : rule.body}}`).join('\n');
+    return `@layer base {\n${rules}\n}`;
+  }).join('\n');
+  return { file: cssFile, vars, ...(baseCss ? { baseCss } : {}), ...(Object.keys(utilityTheme).length ? { utilityTheme } : {}) };
 }
 
 /** The indentation used by the block's existing declarations, or a two-space default. */

@@ -1,3 +1,5 @@
+// Distribution snapshots already contain the built, offline Studio assets.
+if (!process.argv.includes('--runtime-only')) await import('./build-studio.mjs');
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
