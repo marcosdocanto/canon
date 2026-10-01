@@ -78,18 +78,24 @@ async function libStudio(t: TestContext) {
 
 function varRow(page: Page, name: string) { return page.locator(`.le-var-row[data-var="${name}"]`); }
 
-test('boots an adopted fixture and lists a real theme var with its fixture value on the Theme tab', async t => {
+test('boots an adopted fixture and lists a real theme var with its fixture value on the Theme tab, shown as two color wells whose tooltips carry the value (never inline text)', async t => {
   const { page } = await libStudio(t);
   // The Theme tab is the default view — no click needed, only the async state load to settle.
   assert.equal(await page.locator('#le-tab-theme').getAttribute('data-active'), '1');
   const row = varRow(page, 'primary');
   await row.waitFor({ state: 'visible', timeout: 5000 });
   assert.equal(await page.locator('#le-editor-title').innerText(), 'Theme');
-  assert.equal(await row.locator('input[data-var-key="light"]').inputValue(), 'oklch(0.205 0 0)', 'the light value comes from the fixture globals.css, not a placeholder');
-  assert.equal(await row.locator('input[data-var-key="dark"]').inputValue(), 'oklch(0.922 0 0)');
+  const lightWell = row.locator('.le-well[data-var-key="light"]');
+  const darkWell = row.locator('.le-well[data-var-key="dark"]');
+  await lightWell.waitFor({ state: 'visible', timeout: 5000 });
+  // The value comes from the fixture globals.css, not a placeholder — and it's never printed as
+  // visible row text, only reachable via the well's title tooltip.
+  assert.match((await lightWell.getAttribute('title'))!, /oklch\(0\.205 0 0\)/);
+  assert.match((await darkWell.getAttribute('title'))!, /oklch\(0\.922 0 0\)/);
+  assert.equal(await row.locator('input').count(), 0, 'no inline text input for a color var — only wells, until one is clicked open');
 });
 
-test('editing --primary through the page and saving writes the new value to globals.css and leaves button.tsx byte-identical', async t => {
+test('editing --primary through a well\'s popover and saving writes the new value to globals.css and leaves button.tsx byte-identical', async t => {
   const { page, themeFile, buttonFile } = await libStudio(t);
   const buttonBefore = readFileSync(buttonFile, 'utf8');
   const cssBefore = readFileSync(themeFile, 'utf8');
@@ -97,17 +103,21 @@ test('editing --primary through the page and saving writes the new value to glob
 
   const row = varRow(page, 'primary');
   await row.waitFor({ state: 'visible', timeout: 5000 });
-  const lightInput = row.locator('input[data-var-key="light"]');
+  const lightWell = row.locator('.le-well[data-var-key="light"]');
   const save = page.locator('#le-save');
   assert.ok(await save.isDisabled(), 'Save starts disabled until something is dirty');
 
-  // Set the text input's value directly and dispatch an `input` event, exactly as a user typing
-  // (or the color picker's own `input` handler) would trigger the editor's commit() path.
-  await lightInput.evaluate((el: HTMLInputElement, value: string) => {
-    el.value = value;
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  }, '#112233');
+  // Click the well to open its popover, edit the hex/value text field inside it, and commit with
+  // Enter (same path the Apply button takes) — exactly the "click well -> popover -> text field +
+  // Apply" flow the design brief calls for, replacing the old always-visible inline input.
+  await lightWell.click();
+  const popoverInput = page.locator('.le-popover input[data-var-key="light"]');
+  await popoverInput.waitFor({ state: 'visible', timeout: 2000 });
+  await popoverInput.fill('#112233');
+  await popoverInput.press('Enter');
+  assert.equal(await page.locator('.le-popover').count(), 0, 'committing closes the popover');
   assert.ok(await save.isEnabled(), 'changing a theme var must mark the draft dirty');
+  assert.match((await lightWell.getAttribute('title'))!, /#112233/, 'the well\'s own tooltip reflects the committed value immediately');
 
   await Promise.all([page.waitForResponse(r => r.url().endsWith('/api/lib/save')), save.click()]);
   await page.waitForFunction(() => document.querySelector('#le-status')?.textContent === 'saved');
@@ -159,6 +169,43 @@ test('opening Dialog lists its parts: DialogContent editable with chips, DialogT
   assert.equal(await triggerRow.locator('.le-chip').count(), 0, 'DialogTrigger (a plain DialogPrimitive.Trigger alias) is read-only: no chips');
   assert.equal(await triggerRow.locator('input').count(), 0, 'DialogTrigger is read-only: no inputs');
   assert.match(await triggerRow.innerText(), /Read-only:.*no static className found/i);
+});
+
+test('DialogContent\'s background color property shows ONE well + the theme name as text, and clicking it opens a named swatch grid of the project\'s theme colors', async t => {
+  const { page } = await libStudio(t);
+  const item = page.locator('.le-comp-item[data-slug="dialog"]');
+  await item.waitFor({ state: 'visible', timeout: 5000 });
+  await item.click();
+
+  const contentRow = page.locator('.le-part-row[data-part="DialogContent"]');
+  await contentRow.waitFor({ state: 'visible', timeout: 5000 });
+  // DialogContent's literal includes `bg-background` — the Background property row's control is a
+  // single trigger (well + name), never the old inline select+custom+opacity stack.
+  const bgRow = contentRow.locator('.le-prop-row[data-family="background"]');
+  await bgRow.waitFor({ state: 'visible', timeout: 5000 });
+  const trigger = bgRow.locator('.le-prop-color-trigger');
+  assert.equal(await trigger.count(), 1);
+  assert.match(await trigger.innerText(), /^background$/);
+  assert.equal(await bgRow.locator('select').count(), 0, 'no inline <select> — picking a color happens in the popover');
+
+  await trigger.click();
+  const popover = page.locator('.le-popover');
+  await popover.waitFor({ state: 'visible', timeout: 2000 });
+  const swatches = popover.locator('.le-popover-swatch');
+  const names = await swatches.evaluateAll((els) => els.map((e) => e.getAttribute('title')));
+  // The project's real theme colors (from globals.css), named — never an anonymous wall of
+  // swatches, and never polluted by a non-color var like radius (a loose server-side heuristic
+  // flags "0.625rem" as colorish; the client re-validates through the real CSS color parser).
+  assert.deepEqual(names.sort(), ['background', 'border', 'foreground', 'primary', 'primary-foreground', 'ring'].sort());
+  assert.equal(await popover.locator('input[placeholder="#hex / oklch(…)"]').count(), 1, 'custom value field lives in the popover');
+  assert.equal(await popover.locator('input[type="number"]').count(), 1, 'opacity field lives in the popover');
+
+  // Picking "primary" applies it and closes the popover (the component panel re-renders on any edit).
+  await popover.locator('.le-popover-swatch[title="primary"]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.le-popover').length === 0);
+  const reopenedRow = page.locator('.le-part-row[data-part="DialogContent"] .le-prop-row[data-family="background"]');
+  assert.match(await reopenedRow.locator('.le-prop-color-trigger').innerText(), /^primary$/);
+  assert.ok(await page.locator('#le-save').isEnabled());
 });
 
 test('adding a class to DialogContent through the Parts chip editor and saving splices only that literal, byte-identical otherwise, and reload shows it persisted', async t => {

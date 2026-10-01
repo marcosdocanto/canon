@@ -140,7 +140,10 @@ test('previewHtml renders a section per component keyed by slug', () => {
   ]);
   assert.match(html, /<section[^>]*data-slug="button"/);
   assert.match(html, /<section[^>]*data-slug="badge"/);
-  assert.match(html, /<section[^>]*data-slug="input"/);
+  // inputInfo has no cva, no parts, no readOnlyReason — a true placeholder — so it's pooled into
+  // the bottom "Unstyled components" list (a <li data-slug>) instead of getting its own card.
+  assert.doesNotMatch(html, /<section[^>]*data-slug="input"/);
+  assert.match(html, /<li data-slug="input">Input<\/li>/);
 });
 
 test('previewHtml picks a sensible HTML tag per slug for a component that actually has cva (badge -> span, input -> self-closed void element)', () => {
@@ -154,19 +157,24 @@ test('previewHtml picks a sensible HTML tag per slug for a component that actual
   assert.match(html, /<input[^>]*\/>/); // input -> self-closed void element
 });
 
-test('previewHtml renders a compact muted placeholder for a cva-less component with no per-slug render template, instead of the old bare-tag text soup', () => {
+test('previewHtml pools a cva-less component with no per-slug render template into the bottom Unstyled components list, instead of the old bare-tag text soup or its own placeholder card', () => {
   const accordionInfo: ComponentInfo = { slug: 'accordion', file: '/fake/project/src/ui/accordion.tsx', exportName: 'Accordion', importPath: '~/ui/accordion' };
   const accordionExamples: RenderExample[] = [{ title: 'Accordion', jsx: '<Accordion>…</Accordion>' }];
   const html = previewHtml(theme, [{ info: accordionInfo, examples: accordionExamples }]);
-  const section = /<section[^>]*data-slug="accordion"[\s\S]*?<\/section>/.exec(html)?.[0];
-  assert.ok(section, 'expected an accordion section');
-  assert.match(section!, /<h2>Accordion<\/h2>/);
-  assert.match(section!, /no static styles found/);
-  assert.doesNotMatch(section!, /behavior component/, 'the old "behavior component" phrasing must be gone');
-  assert.doesNotMatch(section!, /<figcaption>/, 'no per-example markup for a component with no cva to preview');
-  assert.doesNotMatch(section!, /…/, 'the generic ellipsis filler must never leak into the placeholder');
-  // The component's name appears exactly once (the heading) — never duplicated into a caption too.
-  assert.equal((section!.match(/Accordion/g) ?? []).length, 1);
+  // No per-component card at all for a true placeholder — see `isUnstyledPlaceholder`.
+  assert.doesNotMatch(html, /<section[^>]*data-slug="accordion"/);
+  const unstyled = /<section class="cn-lib-component cn-lib-unstyled">[\s\S]*?<\/section>/.exec(html)?.[0];
+  assert.ok(unstyled, 'expected an Unstyled components section');
+  // Shares .cn-lib-component with every other section — same bordered-card, small-caps-h2 system,
+  // not a visually bolted-on extra.
+  assert.match(unstyled!, /<h2>Unstyled components<\/h2>/);
+  assert.match(unstyled!, /no static styles found/i);
+  assert.match(unstyled!, /<li data-slug="accordion">Accordion<\/li>/);
+  assert.doesNotMatch(html, /behavior component/, 'the old "behavior component" phrasing must be gone');
+  assert.doesNotMatch(html, /<figcaption>/, 'no per-example markup for a component with no cva to preview');
+  assert.doesNotMatch(html, /…/, 'the generic ellipsis filler must never leak into the placeholder');
+  // The component's name appears exactly once (the list item) — never duplicated into a caption too.
+  assert.equal((html.match(/Accordion/g) ?? []).length, 1);
 });
 
 test('previewHtml gives the document real structural CSS: bordered component cards, a muted small-caps heading, and a muted example caption', () => {
@@ -308,13 +316,19 @@ test('previewHtml applies the small semantic-tag heuristic: Title -> h3-ish, Des
   assert.match(html, new RegExp(`<div class="${escapeRegExp(footer.classes!)}">DialogFooter</div>`));
 });
 
-test('previewHtml shows a read-only part as its name plus the muted reason, escaped', () => {
+test('previewHtml collapses a component\'s read-only parts into one muted summary line, with every name — never the (near-identical, repetitive) reason — in its title tooltip', () => {
   const dialogInfo: ComponentInfo = { slug: 'dialog', file: '/fake/project/src/ui/dialog.tsx', exportName: 'Dialog', importPath: '~/ui/dialog', parts: dialogParts };
   const html = previewHtml(theme, [{ info: dialogInfo, examples: [] }]);
   const trigger = dialogPart('DialogTrigger');
   assert.equal(trigger.classes, undefined);
   assert.equal(trigger.readOnlyReason, 'no static className found');
-  assert.match(html, /<p class="cn-lib-part-readonly" data-part="DialogTrigger">DialogTrigger: no static className found<\/p>/);
+  // Dialog, DialogTrigger, DialogPortal, DialogClose are all plain aliases (no static className) —
+  // one line, not four, with all four names in the tooltip (order-preserving) and no per-part reason.
+  assert.match(
+    html,
+    /<p class="cn-lib-part-readonly-summary" title="Dialog, DialogTrigger, DialogPortal, DialogClose">4 behavior parts without static styles<\/p>/,
+  );
+  assert.doesNotMatch(html, /DialogTrigger: no static className found/);
 });
 
 test('previewHtml shows a multi-branch part note, muted, only when present', () => {
@@ -337,20 +351,19 @@ test('previewHtml keeps a cva component\'s real examples AND lists its dynamic-o
   const section = /<section[^>]*data-slug="button"[\s\S]*?<\/section>/.exec(html)?.[0];
   assert.ok(section);
   assert.match(section!, /<figcaption>variant: destructive<\/figcaption>/); // cva examples still render
-  assert.match(section!, /<p class="cn-lib-part-readonly" data-part="Button">Button: dynamic classes only<\/p>/);
+  assert.match(section!, /<p class="cn-lib-part-readonly-summary" title="Button">1 behavior part without static styles<\/p>/);
 });
 
-test('previewHtml falls back to the placeholder (not a wall of read-only lines) when a component has parts but NONE have classes and no cva', () => {
+test('previewHtml falls back to the placeholder (not a wall of read-only lines) when a component has parts but NONE have classes and no cva — and pools it into Unstyled components like any other placeholder', () => {
   const allReadOnly: PartInfo[] = [
     { name: 'Foo', readOnlyReason: 'no static className found' },
     { name: 'Bar', readOnlyReason: 'dynamic classes only' },
   ];
   const info: ComponentInfo = { slug: 'foo', file: '/fake/project/src/ui/foo.tsx', exportName: 'Foo', importPath: '~/ui/foo', parts: allReadOnly };
   const html = previewHtml(theme, [{ info, examples: [] }]);
-  const section = /<section[^>]*data-slug="foo"[\s\S]*?<\/section>/.exec(html)?.[0];
-  assert.ok(section);
-  assert.match(section!, /no static styles found/);
-  assert.doesNotMatch(section!, /Foo:|Bar:/, 'the quiet placeholder wins over a noisy per-part listing when nothing is stylable');
+  assert.doesNotMatch(html, /<section[^>]*data-slug="foo"/, 'a true placeholder never gets its own card');
+  assert.match(html, /<li data-slug="foo">Foo<\/li>/);
+  assert.doesNotMatch(html, /Foo:|Bar:/, 'the quiet placeholder wins over a noisy per-part listing when nothing is stylable');
 });
 
 test('previewHtml escapes a hostile part name, reason, and classes string (XSS)', () => {
@@ -361,13 +374,13 @@ test('previewHtml escapes a hostile part name, reason, and classes string (XSS)'
 
   assert.doesNotMatch(html, /<script>a<\/script>/);
   assert.doesNotMatch(html, /<script>b<\/script>/);
-  assert.doesNotMatch(html, /<script>c<\/script>/);
+  assert.doesNotMatch(html, /<script>c<\/script>/); // the read-only reason is never printed at all now (see readOnlyPartsSummaryMarkup) — not raw, not escaped
   assert.doesNotMatch(html, /safe" onmouseover="alert\(1\)/);
   assert.equal((html.match(/<script/g) ?? []).length, 1); // only the vendored runtime's own
 
   assert.match(html, /&lt;script&gt;a&lt;\/script&gt;/);
-  assert.match(html, /&lt;script&gt;b&lt;\/script&gt;/);
-  assert.match(html, /&lt;script&gt;c&lt;\/script&gt;/);
+  assert.match(html, /&lt;script&gt;b&lt;\/script&gt;/); // the hostile read-only part's NAME still reaches the user, escaped, in the summary's title tooltip
+  assert.doesNotMatch(html, /&lt;script&gt;c&lt;\/script&gt;/); // its reason does not
   assert.match(html, /safe&quot; onmouseover=&quot;alert\(1\)/);
 });
 

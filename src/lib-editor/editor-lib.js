@@ -57,6 +57,50 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     return m ? { num: Number(m[1]), unit: m[2] } : null;
   }
 
+  // ---------------------------------------------------------------- popover (shared by the Theme
+  // wells and the component color control's named swatch grid — a single small floating panel,
+  // anchored to whatever trigger opened it, closed by Escape, an outside click, or scrolling the
+  // editor body out from under it.
+  let activePopover = null; // { el, anchor } | null
+  function closeActivePopover() {
+    if (!activePopover) return;
+    activePopover.el.remove();
+    document.removeEventListener('pointerdown', onPopoverOutside, true);
+    document.removeEventListener('keydown', onPopoverKeydown, true);
+    document.removeEventListener('scroll', closeActivePopover, true);
+    activePopover = null;
+  }
+  function onPopoverOutside(e) {
+    if (activePopover && !activePopover.el.contains(e.target) && e.target !== activePopover.anchor && !activePopover.anchor.contains(e.target)) closeActivePopover();
+  }
+  function onPopoverKeydown(e) { if (e.key === 'Escape') closeActivePopover(); }
+  /**
+   * Open a small floating panel anchored below `anchor`, built by `buildBody(close)`. Only one
+   * popover is ever open at a time — opening a new one closes whatever was open first. Positioned
+   * with `position: fixed` (so `getBoundingClientRect()`'s viewport-relative coordinates need no
+   * scroll offset) and clamped to stay on-screen.
+   */
+  function openPopover(anchor, buildBody) {
+    closeActivePopover();
+    const pop = el('div', { class: 'le-popover', role: 'dialog' });
+    pop.append(buildBody(closeActivePopover));
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect();
+    const maxLeft = Math.max(8, window.innerWidth - pop.offsetWidth - 8);
+    pop.style.left = `${Math.min(Math.max(8, r.left), maxLeft)}px`;
+    const spaceBelow = window.innerHeight - r.bottom;
+    if (spaceBelow < pop.offsetHeight + 12 && r.top > pop.offsetHeight + 12) pop.style.top = `${r.top - pop.offsetHeight - 6}px`;
+    else pop.style.top = `${r.bottom + 6}px`;
+    activePopover = { el: pop, anchor };
+    // Deferred one tick so the click that opened this popover doesn't immediately close it again.
+    setTimeout(() => {
+      document.addEventListener('pointerdown', onPopoverOutside, true);
+      document.addEventListener('keydown', onPopoverKeydown, true);
+      document.addEventListener('scroll', closeActivePopover, true);
+    }, 0);
+    return pop;
+  }
+
   // ---------------------------------------------------------------- state
   let state = null; // last-known-good server state: { theme, components, vocabulary, hashes }
   let draftTheme = null; // { file, vars } — cloned from state.theme, mutated by the Theme tab
@@ -166,6 +210,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
 
   // ---------------------------------------------------------------- data loading
   async function loadState() {
+    closeActivePopover();
     const res = await fetch('/api/lib/state');
     if (!res.ok) throw new Error(`Failed to load state (${res.status})`);
     state = await res.json();
@@ -206,6 +251,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
   // ---------------------------------------------------------------- save
   async function save() {
     if (saving || !isDirty()) return;
+    closeActivePopover();
     // Clear both failure categories up front: a fresh attempt must never leave a stale banner
     // (from an earlier 409) showing alongside — or instead of — this attempt's own result.
     conflictFile = null; saveIssue = null;
@@ -293,6 +339,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     }
   }
   function selectView(view) {
+    closeActivePopover();
     activeView = view;
     saveIssue = null;
     renderRail(); renderEditorBody(); refreshChrome();
@@ -338,25 +385,58 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     return wrap;
   }
   function renderVarRow(name, value) {
-    return el('div', { class: 'le-var-row', 'data-var': name },
-      el('code', { class: 'le-var-name', title: name }, name),
-      renderVarValueInput(name, 'light', value.light, undefined),
-      renderVarValueInput(name, 'dark', value.dark, value.light));
+    const isColor = isCssColor(value.light) || (value.dark !== undefined && isCssColor(value.dark));
+    const row = el('div', { class: 'le-var-row', 'data-var': name, 'data-kind': isColor ? 'color' : 'text' },
+      el('code', { class: 'le-var-name', title: name }, name));
+    row.append(isColor
+      ? el('div', { class: 'le-var-wells' }, renderVarWell(name, 'light', value.light, undefined), renderVarWell(name, 'dark', value.dark, value.light))
+      : el('div', { class: 'le-var-text-pair' }, renderVarTextInput(name, 'light', value.light, undefined), renderVarTextInput(name, 'dark', value.dark, value.light)));
+    return row;
   }
-  function renderVarValueInput(name, key, value, fallback) {
-    const effective = () => (input.value || fallback || '');
-    const wrap = el('div', { class: 'le-var-value' });
-    const input = el('input', { type: 'text', class: 'le-in', 'data-var-key': key, spellcheck: 'false', value: value ?? '', placeholder: key === 'dark' ? 'same as light' : '' });
-    let swatchEl = null;
-    let picker = null; // set below when this value is colorish; kept in sync from the text input too, so typing a hex doesn't get reverted the next time the picker is touched
-    const updateSwatch = () => {
-      const hex = normalizeCssColor(effective());
-      if (hex) {
-        const next = el('span', { class: 'le-swatch', style: `background:${hex}` });
-        if (swatchEl) swatchEl.replaceWith(next); else wrap.prepend(next);
-        swatchEl = next;
-      } else if (swatchEl) { swatchEl.remove(); swatchEl = null; }
+  /** A 24x24 color well for one theme var's light/dark value — the value lives in its `title` tooltip, never as inline text (the design brief's whole complaint about the old 6-box-per-row layout). Click opens a small popover to edit it. */
+  function renderVarWell(name, key, value, fallback) {
+    const well = el('button', { type: 'button', class: 'le-well', 'data-var-key': key });
+    const paint = () => {
+      const effective = value || fallback || '';
+      const hex = normalizeCssColor(effective);
+      well.style.background = hex || '';
+      well.dataset.empty = hex ? null : '1';
+      well.title = value ? `${key}: ${value}` : (key === 'dark' ? `dark: same as light (${fallback || ''})` : `${key}: (empty)`);
     };
+    paint();
+    well.addEventListener('click', () => openVarPopover(well, name, key, value, fallback, (next) => { value = next; paint(); }));
+    return well;
+  }
+  /** The popover body for one well: a hex/value text field + Apply, plus a native color picker when the current (or inherited) value is hex-representable. Stays open across edits (the Theme tab never re-renders on a draft change) so the native picker can commit live. */
+  function openVarPopover(anchor, name, key, value, fallback, onCommitted) {
+    openPopover(anchor, (close) => {
+      const effective = value || fallback || '';
+      const input = el('input', { type: 'text', class: 'le-in', 'data-var-key': key, spellcheck: 'false', value: value ?? '', placeholder: key === 'dark' ? 'same as light' : '' });
+      const hex = cssColorToHex(effective);
+      const picker = hex ? el('input', { type: 'color', class: 'le-color', value: hex, 'aria-label': `${name} ${key}` }) : null;
+      const commit = (next) => {
+        const entry = draftTheme.vars[name];
+        if (key === 'light') entry.light = next;
+        else if (!next) delete entry.dark;
+        else entry.dark = next;
+        value = next;
+        onThemeChange();
+        onCommitted(next);
+      };
+      input.addEventListener('input', () => { const h = cssColorToHex(input.value); if (picker && h) picker.value = h; });
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(input.value); close(); } });
+      if (picker) picker.addEventListener('input', () => { input.value = picker.value; commit(picker.value); }); // live — keeps the popover open so dragging the OS picker updates the swatch continuously
+      const apply = el('button', { type: 'button', class: 'le-btn le-btn--primary le-btn--sm', onclick: () => { commit(input.value); close(); } }, 'Apply');
+      setTimeout(() => input.focus(), 0);
+      return el('div', { class: 'le-popover__body' },
+        el('div', { class: 'le-popover__row' }, input, picker),
+        el('div', { class: 'le-popover__actions' }, apply));
+    });
+  }
+  /** Non-color vars (radius, font stacks…) keep a plain text input — same row grid, no well/popover. */
+  function renderVarTextInput(name, key, value, fallback) {
+    const wrap = el('div', { class: 'le-var-text' });
+    const input = el('input', { type: 'text', class: 'le-in', 'data-var-key': key, spellcheck: 'false', value: value ?? '', placeholder: key === 'dark' ? 'same as light' : '' });
     const commit = (next) => {
       const entry = draftTheme.vars[name];
       if (key === 'light') entry.light = next;
@@ -364,25 +444,14 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
       else entry.dark = next;
       onThemeChange();
     };
-    input.addEventListener('input', () => {
-      commit(input.value); updateSwatch();
-      const hex = cssColorToHex(input.value);
-      if (picker && hex) picker.value = hex; // keep the picker in sync so touching it afterward doesn't revert a typed hex value
-    });
+    input.addEventListener('input', () => commit(input.value));
     wrap.append(input);
-    if (isCssColor(value ?? fallback ?? '')) {
-      picker = el('input', { type: 'color', class: 'le-color', value: cssColorToHex(value ?? fallback ?? '') ?? '#000000', 'aria-label': `${name} ${key}` });
-      picker.addEventListener('input', () => { input.value = picker.value; commit(picker.value); updateSwatch(); });
-      wrap.append(picker);
-    } else {
-      const length = parseSimpleLength(value ?? fallback ?? '');
-      if (length) {
-        const range = el('input', { type: 'range', class: 'le-range', min: 0, max: Math.max(length.num * 3, 2), step: 0.05, value: length.num, 'aria-label': `${name} ${key} (slider)` });
-        range.addEventListener('input', () => { input.value = `${range.value}${length.unit}`; commit(input.value); updateSwatch(); });
-        wrap.append(range);
-      }
+    const length = parseSimpleLength(value ?? fallback ?? '');
+    if (length) {
+      const range = el('input', { type: 'range', class: 'le-var-range', min: 0, max: Math.max(length.num * 3, 2), step: 0.05, value: length.num, 'aria-label': `${name} ${key} (slider)` });
+      range.addEventListener('input', () => { input.value = `${range.value}${length.unit}`; commit(input.value); });
+      wrap.append(range);
     }
-    updateSwatch();
     return wrap;
   }
 
@@ -393,6 +462,9 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     vocabReady = true;
   }
   function onComponentChange(slug) {
+    // Every component-panel edit re-renders the body below (when this slug is showing), which
+    // would orphan a popover anchored to a now-destroyed control — close it first, always.
+    closeActivePopover();
     refreshChrome();
     if (activeView === slug) {
       const body = $('#le-editor-body');
@@ -447,53 +519,81 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     fontSize: 'Font size', fontWeight: 'Weight', radius: 'Radius', spacing: 'Spacing', size: 'Size',
     borderWidth: 'Border', shadow: 'Shadow', opacity: 'Opacity',
   };
-  const themeColorNames = () => (state.vocab?.colors ?? []).map((c) => c.name);
+  /**
+   * `state.vocab.colors` (serve-lib.ts) flags a var as a color with a loose heuristic (its light
+   * value matches a color-function prefix OR merely contains a digit/%/deg) — good enough for most
+   * real themes, but it also catches a plain length like "0.625rem" (radius: digits, no color
+   * function). Re-checking each one through the browser's own CSS color parser (`isCssColor`,
+   * already used for the Theme tab) here, once, keeps "radius" and friends out of every swatch grid
+   * without touching the server response.
+   */
+  const themeColors = () => (state.vocab?.colors ?? []).filter((c) => isCssColor(c.light));
+  const themeColorNames = () => themeColors().map((c) => c.name);
 
-  function colorSwatchButton(color, selected, onPick) {
-    const b = el('button', {
-      type: 'button', class: 'le-swatch', 'data-selected': selected ? '1' : null,
-      title: color.name, 'aria-label': color.name, onclick: () => onPick(color.name),
-    });
-    b.style.background = color.light;
-    return b;
+  /**
+   * Compact color control: ONE 18px well + the color's theme name as text (e.g. "▪ primary"),
+   * nothing else inline. Click opens a popover holding a named, scrollable swatch grid of the
+   * project's theme colors (~6 per row) plus a custom-value field and an opacity number — the
+   * inline select+custom+opacity stack this replaces made every color row three controls wide
+   * before you'd even touched anything.
+   */
+  function colorControl(prop, apply) {
+    const colors = themeColors();
+    const currentOf = (p) => (p.kind === 'theme' ? colors.find((c) => c.name === p.value) : null);
+
+    const well = el('span', { class: 'le-well le-well--sm' });
+    const nameText = el('span', { class: 'le-prop-color-name' });
+    const paint = (p) => {
+      const current = currentOf(p);
+      well.style.background = current ? current.light : (p.kind === 'raw' ? (normalizeCssColor(p.value) || '') : '');
+      well.dataset.empty = well.style.background ? null : '1';
+      const label = p.kind === 'theme' ? p.value : (p.value || 'custom');
+      nameText.textContent = label + (p.opacity ? `/${p.opacity}` : '');
+      trigger.title = p.kind === 'theme' ? `theme: ${p.value}` : (p.value || 'custom color');
+    };
+    const trigger = el('button', { type: 'button', class: 'le-prop-color-trigger' }, well, nameText);
+    paint(prop);
+    trigger.addEventListener('click', () => openColorPropertyPopover(trigger, prop, (next) => { prop = next; paint(next); apply(next); }));
+    return trigger;
   }
 
-  // Compact color control: current-value swatch + a named select of the project's theme colors
-  // (a wall of 33 anonymous swatches was unreadable) + a custom-value field and opacity.
-  function colorControl(prop, apply) {
-    const colors = state.vocab?.colors ?? [];
-    const current = prop.kind === 'theme' ? colors.find((c) => c.name === prop.value) : null;
+  /** The color control's popover: a named, scrollable swatch grid of theme colors, a custom-value field, and an opacity number — all three live inside the one popover rather than a stack of inline controls. */
+  function openColorPropertyPopover(anchor, prop, apply) {
+    const colors = themeColors();
+    openPopover(anchor, () => {
+      const grid = el('div', { class: 'le-popover-swatchgrid' }, ...colors.map((c) => {
+        const btn = el('button', {
+          type: 'button', class: 'le-popover-swatch',
+          'data-selected': (prop.kind === 'theme' && prop.value === c.name) ? '1' : null,
+          title: c.name,
+          onclick: () => apply({ ...prop, kind: 'theme', value: c.name }),
+        });
+        const sw = el('span', { class: 'le-well le-well--sm' });
+        sw.style.background = c.light;
+        btn.append(sw, el('span', { class: 'le-popover-swatch__name' }, c.name));
+        return btn;
+      }));
+      const custom = el('input', {
+        type: 'text', class: 'le-in le-in--sm', spellcheck: 'false',
+        placeholder: '#hex / oklch(…)', value: prop.kind === 'raw' ? prop.value : '',
+      });
+      custom.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const v = custom.value.trim();
+        if (v) apply({ ...prop, kind: 'raw', value: v });
+      });
+      const opacity = el('input', {
+        type: 'number', class: 'le-in le-in--sm', min: '0', max: '100', step: '5',
+        placeholder: '100', value: prop.opacity ?? '', title: 'Opacity %',
+      });
+      opacity.addEventListener('change', () => apply({ ...prop, opacity: opacity.value || undefined }));
 
-    const swatch = el('span', { class: 'le-swatch le-swatch--current', title: current?.name ?? prop.value });
-    swatch.style.background = current ? current.light : (prop.kind === 'raw' ? prop.value : 'transparent');
-
-    const select = el('select', { class: 'le-in le-in--sm le-prop-colorsel' },
-      el('option', { value: '', selected: prop.kind === 'raw' ? true : null }, prop.kind === 'raw' ? `custom: ${prop.value}` : 'custom…'),
-      ...colors.map((c) => el('option', { value: c.name, selected: prop.kind === 'theme' && prop.value === c.name ? true : null }, c.name)));
-    select.addEventListener('change', () => {
-      if (select.value) apply({ ...prop, kind: 'theme', value: select.value });
-      else custom.focus();
+      return el('div', { class: 'le-popover__body le-popover__body--color' },
+        el('div', { class: 'le-popover__section-label' }, 'Theme colors'),
+        el('div', { class: 'le-popover-swatchgrid-scroll' }, grid),
+        el('div', { class: 'le-popover__row' }, el('span', { class: 'le-popover__label' }, 'Custom'), custom),
+        el('div', { class: 'le-popover__row' }, el('span', { class: 'le-popover__label' }, 'Opacity'), opacity));
     });
-
-    const custom = el('input', {
-      type: 'text', class: 'le-in le-in--sm le-prop-custom', spellcheck: 'false',
-      placeholder: '#hex / oklch(…)', value: prop.kind === 'raw' ? prop.value : '',
-    });
-    custom.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
-      const v = custom.value.trim();
-      if (v) apply({ ...prop, kind: 'raw', value: v });
-    });
-
-    const opacity = el('input', {
-      type: 'number', class: 'le-in le-in--sm le-prop-opacity', min: '0', max: '100', step: '5',
-      placeholder: '100', value: prop.opacity ?? '', title: 'Opacity %',
-    });
-    opacity.addEventListener('change', () => apply({ ...prop, opacity: opacity.value || undefined }));
-
-    return el('div', { class: 'le-prop-color le-prop-color--compact' },
-      el('div', { class: 'le-prop-color__row' }, swatch, select, opacity),
-      el('div', { class: 'le-prop-color__row' }, custom));
   }
 
   function scaleControl(prop, scale, apply, { slider = false } = {}) {
