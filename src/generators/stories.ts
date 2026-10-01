@@ -14,6 +14,47 @@ function elementsBlock(examples: RenderExample[]): string {
   return examples.map((example) => `  ${example.jsx}`).join('\n');
 }
 
+/**
+ * Compound-component composition for stories: when a component's parts follow the
+ * Root/Header/Title/Description/Action/Content/Footer convention (Card, Alert, Dialog-like
+ * families), the story renders ONE assembled example — the real nested JSX the app would write —
+ * instead of a bare root with placeholder text. Mirrors preview-lib's composedMarkup, but emits
+ * real component JSX for Storybook (React actually executes here).
+ */
+const STORY_ROLES = ['Header', 'Title', 'Description', 'Action', 'Content', 'Footer'] as const;
+
+function composedStory(component: ComponentInfo): { jsx: string; imports: string[] } | undefined {
+  const parts = component.parts ?? [];
+  const styled = new Set(parts.filter((p) => p.classes !== undefined).map((p) => p.name));
+  const exported = new Set(parts.map((p) => p.name)); // every part IS an export of the module
+  const name = component.exportName;
+  const has = (role: string) => exported.has(name + role);
+  // Compose when the family exists, regardless of which members carry static classes —
+  // Storybook runs the real components, so even dynamic-classed parts render correctly.
+  const roles = STORY_ROLES.filter((r) => has(r));
+  if (!exported.has(name) || roles.length < 2) return undefined;
+
+  const tag = (suffix: string, children: string) => `<${name}${suffix}>${children}</${name}${suffix}>`;
+  const header = has('Header')
+    ? tag('Header', [
+        has('Title') ? tag('Title', `${name} title`) : '',
+        has('Description') ? tag('Description', 'Supporting description for this component.') : '',
+        has('Action') ? tag('Action', 'Action') : '',
+      ].filter(Boolean).join(''))
+    : '';
+  const body = [
+    header,
+    has('Content') ? tag('Content', 'Body content — rendered by the real component.') : '',
+    has('Footer') ? tag('Footer', 'Footer') : '',
+  ].filter(Boolean).join('\n    ');
+
+  const used = [name, ...roles.map((r) => name + r)].filter((n) => styled.has(n) || exported.has(n));
+  return {
+    jsx: `  <${name} style={{ width: 360 }}>\n    ${body}\n  </${name}>`,
+    imports: used,
+  };
+}
+
 /** Build a component's `stories/canon/<slug>.stories.tsx` source. */
 function storyContent(component: ComponentInfo, examples: RenderExample[]): string {
   const { exportName, importPath, readOnlyReason } = component;
@@ -22,17 +63,22 @@ function storyContent(component: ComponentInfo, examples: RenderExample[]): stri
   const parameters = readOnlyReason
     ? `, parameters: { docs: { description: { component: ${JSON.stringify(`Style block is read-only for Canon: ${readOnlyReason}`)} } } }`
     : '';
+  const composed = composedStory(component);
+  const importNames = composed ? [...new Set(composed.imports)].join(', ') : exportName;
+  const renderBody = composed
+    ? composed.jsx
+    : elementsBlock(examples);
   return [
     GENERATED_MARK,
     `import type { Meta, StoryObj } from '@storybook/react';`,
-    `import { ${exportName} } from '${importPath}';`,
+    `import { ${importNames} } from '${importPath}';`,
     '',
     `const meta = { title: 'Canon/${exportName}', component: ${exportName}${parameters} } satisfies Meta<typeof ${exportName}>;`,
     'export default meta;',
     'type Story = StoryObj<typeof meta>;',
     '',
     `export const Variants: Story = { render: () => (<div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>`,
-    elementsBlock(examples),
+    renderBody,
     `</div>) };`,
     '',
   ].join('\n');
