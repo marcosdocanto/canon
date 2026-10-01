@@ -229,9 +229,31 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     try { await loadState(); status('reloaded'); }
     catch (e) { status(`Reload failed: ${e.message}`, true); }
   }
+  // ---- Storybook integration: when the project's Storybook dev server is running, it IS the
+  // preview — real React components, not the static class-sample gallery. The static preview
+  // remains the instant fallback. Detection is a cheap probe of the conventional port; story ids
+  // follow `canon storybook`'s generated naming (Canon/<Export> → canon-<slug>--variants).
+  let storybookUrl = null;
+  async function detectStorybook() {
+    for (const url of ['http://localhost:6006']) {
+      try {
+        const res = await fetch(url + '/index.json', { mode: 'cors', signal: AbortSignal.timeout(1200) });
+        if (res.ok) { storybookUrl = url; return; }
+      } catch { /* not running — fall back to static preview */ }
+    }
+    storybookUrl = null;
+  }
+  function storyUrlFor(view) {
+    const base = `${storybookUrl}/iframe.html?globals=&viewMode=story`;
+    if (view === 'theme' || !view) return `${base}&id=canon-button--variants`;
+    return `${base}&id=canon-${view}--variants`;
+  }
   function loadFullPreview() {
-    // The server's own disk state (not the draft) — used on first load and right after a save,
-    // when disk and draft agree. Cache-busted defensively even though the endpoint sends no-store.
+    if (storybookUrl) {
+      $('#le-preview-frame').src = storyUrlFor(activeView);
+      return;
+    }
+    // Fallback: the server's own static class-sample preview. Cache-busted defensively.
     $('#le-preview-frame').src = `/api/lib/preview?t=${Date.now()}`;
   }
   function showPreviewHtml(html) {
@@ -349,6 +371,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
   // Clicking a component must SHOW that component: every preview section carries
   // data-slug (preview-lib.ts), so scroll the iframe to it and flash a highlight.
   function scrollPreviewTo(view) {
+    if (storybookUrl) { if (view !== 'theme') $('#le-preview-frame').src = storyUrlFor(view); return; }
     if (view === 'theme') return;
     try {
       const doc = $('#le-preview-frame').contentDocument;
@@ -831,6 +854,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     e.returnValue = '';
   });
 
+  detectStorybook().then(() => loadFullPreview());
   loadState().catch((e) => {
     const body = $('#le-editor-body');
     body.innerHTML = '';
