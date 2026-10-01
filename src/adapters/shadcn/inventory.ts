@@ -68,9 +68,13 @@ function unsafeVariantKey(spec: CvaSpec): string | undefined {
 // shown editable for a part that can never actually be saved.
 const SAFE_CLASS_LIST = /^[^\s"'`{}\\]+(?: [^\s"'`{}\\]+)*$/;
 
-function validateClassList(classes: string[], where: string): void {
+function validateClassList(classes: string[], where: string, original: string[] = []): void {
+  // CVA strings are JSON-escaped when printed. Existing opaque selector tokens may survive a
+  // neighboring safe edit, but must come from the same scope in freshly parsed source, not the
+  // client's inventory. Parts never use this allowance because their splicer preserves quotes.
+  const preserved = new Set(original.flatMap((value) => value.split(' ')).filter((token) => token && !SAFE_CLASS_LIST.test(token)));
   for (const cls of classes) {
-    if (!SAFE_CLASS_LIST.test(cls)) throw new Error(`shadcn adapter: ${where} has an unsafe class string: ${JSON.stringify(cls)}`);
+    if (!SAFE_CLASS_LIST.test(cls) && !cls.split(' ').every((token) => SAFE_CLASS_LIST.test(token) || preserved.has(token))) throw new Error(`shadcn adapter: ${where} has an unsafe class string: ${JSON.stringify(cls)}`);
   }
 }
 
@@ -117,12 +121,12 @@ function withWriteGrammar(part: PartInfo): PartInfo {
  * `defaultVariants`' own keys and string values are held to the same two grammars defensively, even
  * though nothing renders them unescaped today (see `unsafeVariantKey`'s docstring on that scope).
  */
-function validateSpec(spec: CvaSpec, slug: string): void {
-  validateClassList(spec.base, `"${slug}" base`);
+function validateSpec(spec: CvaSpec, slug: string, original: CvaSpec): void {
+  validateClassList(spec.base, `"${slug}" base`, original.base);
   for (const [axis, options] of Object.entries(spec.variants)) {
-    for (const [value, classes] of Object.entries(options)) validateClassList(classes, `"${slug}" variants.${axis}.${value}`);
+    for (const [value, classes] of Object.entries(options)) validateClassList(classes, `"${slug}" variants.${axis}.${value}`, original.variants[axis]?.[value]);
   }
-  spec.compoundVariants.forEach(({ classes }, index) => validateClassList(classes, `"${slug}" compoundVariants[${index}]`));
+  spec.compoundVariants.forEach(({ classes }, index) => validateClassList(classes, `"${slug}" compoundVariants[${index}]`, original.compoundVariants[index]?.classes));
 
   const unsafeKey = unsafeVariantKey(spec);
   if (unsafeKey !== undefined) throw new Error(`shadcn adapter: "${slug}" has an unsafe variant key: ${JSON.stringify(unsafeKey)}`);
@@ -249,8 +253,6 @@ export function inventory(root: string): ComponentInfo[] {
  * (disk or staged) via a fresh `findCva`, never trusted from a prior parse.
  */
 export function writeVariants(component: ComponentInfo, spec: CvaSpec, stagedSource?: string): Write {
-  validateSpec(spec, component.slug);
-
   // never trust the caller's path to already be canonical on a fresh disk read (see connect.ts,
   // install.ts) — but `component.file` is canonical by construction either way (inventory() builds
   // it under an already-realpath'd root), so re-resolving it again when staging is unnecessary.
@@ -258,12 +260,14 @@ export function writeVariants(component: ComponentInfo, spec: CvaSpec, stagedSou
   const source = stagedSource ?? readFileSync(file, 'utf8');
   const span = findCva(source); // first cva() call only, same as inventory()
   if (!span) throw new Error(`shadcn adapter: "${component.slug}" no longer has a cva() call (${file})`);
+  let original: CvaSpec;
   try {
-    parseCva(source, span);
+    original = parseCva(source, span);
   } catch (error) {
     if (!(error instanceof CvaParseError)) throw error;
     throw new Error(`shadcn adapter: "${component.slug}"'s cva() is no longer parseable: ${error.message}`);
   }
+  validateSpec(spec, component.slug, original);
   const content = spliceCva(source, span, spec);
 
   const roundTripSpan = findCva(content);

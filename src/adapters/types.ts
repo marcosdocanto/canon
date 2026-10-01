@@ -2,13 +2,13 @@ import type { Write } from '../design-files.ts';
 import type { DeepPartial, System, Tokens } from '../types.ts';
 
 /** CSS custom property theme configuration for a library. */
-export interface LibraryTheme { file: string; vars: Record<string, { light: string; dark?: string }>; }
+export interface LibraryTheme { baseCss?: string; utilityTheme?: Record<string, string>; file: string; vars: Record<string, { light: string; dark?: string }>; }
 
 /** Class-based variant specification from a component. */
 export interface CvaSpec { base: string[]; variants: Record<string, Record<string, string[]>>; compoundVariants: { match: Record<string, string | boolean>; classes: string[] }[]; defaultVariants: Record<string, string | boolean>; }
 
 /** One exported subcomponent's editable className literal, or the reason it can't be edited (see shadcn/parts.ts). */
-export interface PartInfo { name: string; classes?: string; span?: { start: number; end: number } /* byte offsets of the literal, INCLUDING its quotes */; dynamicTail?: string; readOnlyReason?: string; note?: string /* non-blocking context, e.g. multiple conditional render branches each yield a literal and only the first is being edited */; }
+export interface PartInfo { previewChild?: { wrapperTag: string; tag: string; classes: string }; name: string; classes?: string; span?: { start: number; end: number } /* byte offsets of the literal, INCLUDING its quotes */; dynamicTail?: string; readOnlyReason?: string; note?: string /* non-blocking context, e.g. multiple conditional render branches each yield a literal and only the first is being edited */; }
 
 /** Inventory entry for a component from a library. */
 export interface ComponentInfo { slug: string; file: string; exportName: string; importPath: string; cva?: CvaSpec; cvaSpan?: { start: number; end: number }; readOnlyReason?: string; parts?: PartInfo[]; }

@@ -61,7 +61,7 @@ function stateHashes(theme: LibraryTheme, components: ComponentInfo[]): Record<s
 
 /** The subset of `PartInfo` the client ever sees — never the internal byte-offset `span` (same rule as `ComponentInfo.file`/`cvaSpan` below). */
 function publicPart(p: PartInfo) {
-  return { name: p.name, classes: p.classes, dynamicTail: p.dynamicTail, readOnlyReason: p.readOnlyReason, note: p.note };
+  return { name: p.name, classes: p.classes, dynamicTail: p.dynamicTail, readOnlyReason: p.readOnlyReason, note: p.note, previewChild: p.previewChild };
 }
 
 /** The subset of `ComponentInfo` the client ever sees — never the absolute `file` path (that only appears, keyed, inside `hashes`), the internal `cvaSpan`, or any part's internal `span` (see `publicPart`). */
@@ -90,12 +90,33 @@ function draftTheme(value: unknown): LibraryTheme {
   return { file: theme.file as string, vars };
 }
 
-/** Validate a `POST /api/lib/preview` body: a record whose only key is `theme`. */
-function previewBody(value: unknown): LibraryTheme {
+/** Preview drafts use the same validated shapes as Save, but never install files. */
+function previewBody(value: unknown) {
   const body = record(value, 'Preview body');
-  for (const key of Object.keys(body)) requireValue(key === 'theme', `Unknown preview field: ${key}`);
+  for (const key of Object.keys(body)) requireValue(['theme', 'components', 'parts', 'page'].includes(key), `Unknown preview field: ${key}`);
   requireValue('theme' in body, 'Preview body requires a theme field');
-  return draftTheme(body.theme);
+  const page = body.page ?? 'components';
+  requireValue(['dashboard', 'settings', 'components'].includes(page as string), 'Unknown preview page');
+  const components: Record<string, CvaSpec> = Object.create(null);
+  if (body.components !== undefined) for (const [slug, spec] of Object.entries(record(body.components, 'components'))) components[slug] = draftCvaSpec(spec, `components.${slug}`);
+  return { theme: draftTheme(body.theme), components, parts: body.parts === undefined ? {} : draftParts(body.parts), page: page as 'dashboard' | 'settings' | 'components' };
+}
+
+function previewInventory(inventory: ComponentInfo[], draft: ReturnType<typeof previewBody>): ComponentInfo[] {
+  const bySlug = new Map(inventory.map((info) => [info.slug, info]));
+  for (const slug of new Set([...Object.keys(draft.components), ...Object.keys(draft.parts)])) {
+    const info = bySlug.get(slug);
+    if (!info) throw new HttpError(422, `Unknown component: ${slug}`);
+    if (draft.components[slug] && !info.cva) throw new HttpError(422, `Read-only component: ${slug}`);
+    for (const name of Object.keys(draft.parts[slug] ?? {})) {
+      const part = info.parts?.find((p) => p.name === name);
+      if (!part?.span || part.readOnlyReason) throw new HttpError(422, `Unknown or read-only part: ${slug}.${name}`);
+    }
+  }
+  return inventory.map((info) => ({ ...info,
+    cva: draft.components[info.slug] ?? info.cva,
+    parts: info.parts?.map((part) => ({ ...part, classes: draft.parts[info.slug]?.[part.name] ?? part.classes })),
+  }));
 }
 
 function classList(value: unknown, name: string): string[] {
@@ -243,9 +264,12 @@ export function libHandler(root: string, adapterId: string, designDir: string): 
 
       if (url === '/api/lib/preview') {
         if (req.method !== 'GET' && req.method !== 'POST') throw new HttpError(405, 'Use GET or POST for /api/lib/preview');
-        const components = adapter.inventory(root);
-        const theme = req.method === 'POST' ? previewBody(await readBody(req)) : adapter.readTheme(root);
-        const html = previewHtml(theme, components.map((info) => ({ info, examples: adapter.renderSpec(info) })));
+        const draft = req.method === 'POST' ? previewBody(await readBody(req)) : undefined;
+        const inventory = adapter.inventory(root);
+        const components = draft ? previewInventory(inventory, draft) : inventory;
+        const diskTheme = adapter.readTheme(root);
+        const theme = draft ? { ...draft.theme, utilityTheme: diskTheme.utilityTheme, baseCss: diskTheme.baseCss } : diskTheme;
+        const html = previewHtml(theme, components.map((info) => ({ info, examples: adapter.renderSpec(info) })), draft?.page);
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         res.end(html);
         return;

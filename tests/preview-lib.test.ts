@@ -399,3 +399,41 @@ test('previewHtml escapes a hostile part name, reason, and classes string (XSS)'
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+test('composed example pages reuse shared classes and retain instance variant inspection metadata', () => {
+  const html = previewHtml(theme, [{ info: buttonInfo, examples: buttonExamples }], 'settings');
+  const body = html.slice(html.indexOf('<body'));
+  assert.match(body, /data-page="settings"/);
+  assert.match(body, /data-inspect="button"/);
+  assert.match(body, /data-picks="[^\"]*destructive/);
+  assert.match(body, /class="inline-flex items-center bg-destructive text-destructive-foreground/);
+  assert.doesNotMatch(body, /data-inspect="card"/); // absent primitives use neutral layout, never pretend editable
+});
+
+test('preview preserves the project utility radius mapping rather than Tailwind defaults', () => {
+  const html = previewHtml({ ...theme, utilityTheme: { 'radius-md': 'calc(var(--radius) * 0.8)', 'font-heading': 'var(--font-sans)' } }, []);
+  assert.match(html, /--radius-md: calc\(var\(--radius\) \* 0\.8\);/);
+  assert.match(html, /--font-heading: var\(--font-sans\);/);
+});
+
+test('project base CSS keeps selectors and quotes intact but cannot break out of the style element', () => {
+  const html = previewHtml({ ...theme, baseCss: '@layer base { [data-kind="input"] { @apply text-sm; } /* </style><script>bad()</script> */ }' }, []);
+  assert.match(html, /\[data-kind="input"\] \{ @apply text-sm;/);
+  assert.doesNotMatch(html, /<\/style><script>bad/);
+  assert.equal((html.match(/<script>/g) ?? []).length, 1);
+});
+
+test('preview resolves shared variant conflicts like cn: later background, border, radius and size win', () => {
+  const spec: CvaSpec = {
+    base: ['bg-primary border border-transparent rounded-md px-4 h-8 hover:bg-primary'],
+    variants: { variant: { outline: ['bg-background border-border rounded-full px-8 h-10 hover:bg-muted'] } },
+    defaultVariants: { variant: 'outline' }, compoundVariants: [],
+  };
+  assert.equal(classesFor(spec, {}), 'border bg-background border-border rounded-full px-8 h-10 hover:bg-muted');
+});
+
+test('page tables retain the static nested table styles while edits apply to the recorded wrapper', () => {
+  const info: ComponentInfo = { slug: 'table', file: '/table.tsx', importPath: '~/table', exportName: 'Table', parts: [{ name: 'Table', classes: 'rounded-xl overflow-auto', previewChild: { wrapperTag: 'div', tag: 'table', classes: 'w-full text-sm' } }] };
+  const html = previewHtml(theme, [{ info, examples: [] }], 'dashboard');
+  assert.match(html, /<div data-inspect="table" data-part="Table" class="rounded-xl overflow-auto"[^>]*><table class="w-full text-sm" data-slot="table">/);
+});

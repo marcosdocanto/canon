@@ -11,6 +11,7 @@
 // <canvas> 2D context) instead of duplicating that module's OKLCH math. That also means this file
 // recognizes anything the browser's CSS parser accepts as a color (hex, rgb(), hsl(), oklch(),
 // color(), …), a superset of the hex/rgb/hsl/oklch the brief calls out by name.
+import { reconcileSavedDraft, createPreviewVersion } from './draft-state.js';
 import { parseClassList, composeClassList, SCALES } from './classmap.js';
 (() => {
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -118,6 +119,13 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
   let saving = false;
   let previewBlobUrl = null;
   let vocabReady = false;
+  let previewPage = 'dashboard';
+  let previewMode = 'draft';
+  let inspectedScope = 'base';
+  const previewVersion = createPreviewVersion();
+  let previewController = null;
+  let previewScroll = 0;
+  let resetPreviewScroll = false;
 
   const specOf = (slug) => state.components.find((c) => c.slug === slug);
   function ensureDraft(slug) {
@@ -189,6 +197,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     const save = $('#le-save');
     save.disabled = saving || !isDirty();
     save.textContent = saving ? 'Saving…' : 'Save';
+    if ($('#le-reset')) $('#le-reset').disabled = saving || !isDirty();
     const themeTab = $('#le-tab-theme');
     themeTab.dataset.active = activeView === 'theme' ? '1' : '';
     themeTab.dataset.dirty = isThemeDirty() ? '1' : '';
@@ -261,26 +270,86 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     if (storybookIds.size && !storybookIds.has(id)) return null;
     return `${base}&id=${id}`;
   }
+  function previewStatus(message, error = false) {
+    const label = $('#le-preview-status');
+    if (label) { label.textContent = message; label.dataset.error = error ? '1' : ''; }
+  }
+  function snapshotDraft() {
+    return clone({ theme: draftTheme, components: Object.fromEntries(draftComponents), parts: Object.fromEntries(draftParts) });
+  }
   function loadFullPreview() {
-    const storyUrl = storybookUrl ? storyUrlFor(activeView) : null;
-    if (storyUrl) { $('#le-preview-frame').src = storyUrl; return; }
-    // No Storybook, excluded slug, or story missing from the live index →
-    // the server's own static class-sample preview. Cache-busted defensively.
-    $('#le-preview-frame').src = `/api/lib/preview?t=${Date.now()}`;
+    if (!state) return;
+    if (previewMode === 'storybook') {
+      previewVersion.next(); previewController?.abort();
+      const storyUrl = storybookUrl ? storyUrlFor(activeView) : null;
+      if (storyUrl) {
+        $('#le-preview-frame').src = storyUrl;
+        previewStatus('Saved React components · Save to apply edits');
+      } else {
+        $('#le-preview-frame').src = 'about:blank';
+        previewStatus('No saved React story for this component. Choose Live draft to preview its styles.', true);
+      }
+      return;
+    }
+    schedulePreview();
   }
   function showPreviewHtml(html) {
+    const frame = $('#le-preview-frame');
+    try { previewScroll = resetPreviewScroll ? 0 : frame.contentWindow.scrollY; } catch { previewScroll = 0; }
+    resetPreviewScroll = false;
     const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     const old = previewBlobUrl;
-    $('#le-preview-frame').src = url;
+    frame.src = url;
     previewBlobUrl = url;
     if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
   }
-  const schedulePreview = debounce(() => {
-    fetch('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: draftTheme }) })
-      .then((res) => (res.ok ? res.text() : Promise.reject(new Error(`Preview failed (${res.status})`))))
-      .then(showPreviewHtml)
-      .catch((e) => status(e.message, true));
-  }, 150);
+  const fetchPreview = debounce(async (version) => {
+    if (!previewVersion.isCurrent(version) || previewMode !== 'draft' || !state) return;
+    previewController = new AbortController();
+    try {
+      const res = await fetch('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' },
+        signal: previewController.signal, body: JSON.stringify({ ...snapshotDraft(), page: previewPage }) });
+      if (!res.ok) throw new Error((await res.json()).error ?? `Preview failed (${res.status})`);
+      const html = await res.text();
+      if (!previewVersion.isCurrent(version) || previewMode !== 'draft') return;
+      showPreviewHtml(html);
+      previewStatus('Live draft · Click an element to edit shared styles');
+    } catch (error) {
+      if (error.name !== 'AbortError' && previewVersion.isCurrent(version)) previewStatus(`Preview unavailable: ${error.message}`, true);
+    }
+  }, 100);
+  function schedulePreview() {
+    const version = previewVersion.next();
+    previewController?.abort();
+    if (previewMode !== 'draft') { previewStatus('Saved React components · Save to apply edits'); return; }
+    previewStatus('Updating draft…');
+    fetchPreview(version);
+  }
+  $('#le-preview-frame').addEventListener('load', () => {
+    if (previewMode !== 'draft') return;
+    try {
+      const frame = $('#le-preview-frame');
+      const doc = frame.contentDocument;
+      if (!doc) return;
+      frame.contentWindow.scrollTo(0, previewScroll);
+      doc.addEventListener('click', (event) => {
+        const target = event.target.closest('[data-inspect], [data-part], [data-slug]');
+        if (!target) return;
+        const slug = target.dataset.inspect ?? target.closest('[data-slug]')?.dataset.slug;
+        if (!slug || !specOf(slug)) return;
+        event.preventDefault();
+        let scope = target.dataset.part ? `part:${target.dataset.part}` : 'base';
+        if (target.dataset.picks) {
+          try {
+            const picks = JSON.parse(target.dataset.picks);
+            const axis = Object.keys(picks).find((key) => key === 'variant') ?? Object.keys(picks)[0];
+            if (axis) scope = `variant:${axis}:${picks[axis]}`;
+          } catch { /* malformed instance metadata is ignored */ }
+        }
+        selectView(slug, scope);
+      });
+    } catch { /* saved React is cross-origin; never inspect its document */ }
+  });
 
   // ---------------------------------------------------------------- save
   async function save() {
@@ -303,14 +372,27 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
       const changedBySlug = Object.fromEntries(partsDirty.map((slug) => [slug, changedParts(slug)]).filter(([, changed]) => Object.keys(changed).length > 0));
       if (Object.keys(changedBySlug).length) payload.parts = changedBySlug;
     }
+    const submitted = snapshotDraft();
     try {
       const res = await fetch('/api/lib/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       if (res.status === 200) {
-        state = await res.json();
-        draftTheme = clone(state.theme);
-        draftComponents.clear();
-        draftParts.clear();
-        status('saved');
+        const nextState = await res.json();
+        if (nextState.stateError || !nextState.theme) {
+          conflictFile = 'Saved, but state could not be refreshed';
+          status('Files saved. Reload before editing again.', true);
+          return;
+        }
+        const current = snapshotDraft();
+        state = nextState;
+        const next = reconcileSavedDraft(submitted, current, {
+          theme: clone(state.theme),
+          components: Object.fromEntries(state.components.filter((c) => c.cva).map((c) => [c.slug, c.cva])),
+          parts: Object.fromEntries(state.components.map((c) => [c.slug, specPartsOf(c.slug)])),
+        });
+        draftTheme = next.theme;
+        draftComponents.clear(); for (const [slug, spec] of Object.entries(next.components)) draftComponents.set(slug, spec);
+        draftParts.clear(); for (const [slug, parts] of Object.entries(next.parts)) draftParts.set(slug, parts);
+        status(isDirty() ? 'Saved · newer edits remain unsaved' : 'saved');
         renderAll();
         loadFullPreview();
         return;
@@ -334,6 +416,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
         } else if (body.partName !== undefined) {
           saveIssue = { scope: 'part', slug: body.slug, partName: body.partName, message: body.message ?? 'Save failed' };
           if (body.slug && specOf(body.slug)) activeView = body.slug;
+          inspectedScope = `part:${body.partName}`;
         } else {
           saveIssue = { scope: 'component', slug: body.slug, message: body.message ?? 'Save failed' };
           if (body.slug && specOf(body.slug)) activeView = body.slug;
@@ -357,7 +440,8 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
   function renderRail() {
     const list = $('#le-component-list');
     list.innerHTML = '';
-    for (const c of state.components) {
+    const search = ($('#le-search')?.value ?? '').trim().toLowerCase();
+    for (const c of state.components.filter((c) => `${c.exportName} ${c.slug}`.toLowerCase().includes(search))) {
       list.append(el('button', {
         type: 'button',
         class: 'le-nav-item le-comp-item',
@@ -372,18 +456,22 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
       c.readOnlyReason ? el('span', { class: 'le-badge' }, 'read-only') : null));
     }
   }
-  function selectView(view) {
+  function selectView(view, scope) {
+    if (activeView !== view) inspectedScope = 'base';
+    if (scope) inspectedScope = scope;
     closeActivePopover();
     activeView = view;
     saveIssue = null;
     renderRail(); renderEditorBody(); refreshChrome();
-    scrollPreviewTo(view);
+    if (previewMode === 'storybook') loadFullPreview();
+    else scrollPreviewTo(view);
+    if (window.innerWidth <= 820 && $('#le-library-navigation')) $('#le-library-navigation').open = false;
   }
 
   // Clicking a component must SHOW that component: every preview section carries
   // data-slug (preview-lib.ts), so scroll the iframe to it and flash a highlight.
   function scrollPreviewTo(view) {
-    if (storybookUrl) { if (view !== 'theme') loadFullPreview(); return; }
+    if (previewMode !== 'draft' || previewPage !== 'components') return;
     if (view === 'theme') return;
     try {
       const doc = $('#le-preview-frame').contentDocument;
@@ -414,7 +502,10 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     const isColorVar = ([, v]) => isCssColor(v.light) || (v.dark !== undefined && isCssColor(v.dark));
     const colorVars = entries.filter(isColorVar);
     const otherVars = entries.filter((entry) => !isColorVar(entry));
-    if (colorVars.length) wrap.append(el('section', { class: 'le-section' }, el('h3', { class: 'le-group-title' }, 'Colors'), el('div', { class: 'le-var-list' }, ...colorVars.map(([name, value]) => renderVarRow(name, value)))));
+    const secondaryColors = colorVars.filter(([name]) => /^(chart-|sidebar)/.test(name));
+    const primaryColors = colorVars.filter(([name]) => !/^(chart-|sidebar)/.test(name));
+    if (primaryColors.length) wrap.append(el('section', { class: 'le-section' }, el('h3', { class: 'le-group-title' }, 'Colors'), el('div', { class: 'le-var-list' }, ...primaryColors.map(([name, value]) => renderVarRow(name, value)))));
+    if (secondaryColors.length) wrap.append(el('details', { class: 'le-advanced' }, el('summary', {}, 'Chart & sidebar colors'), el('div', { class: 'le-var-list' }, ...secondaryColors.map(([name, value]) => renderVarRow(name, value)))));
     if (otherVars.length) wrap.append(el('section', { class: 'le-section' }, el('h3', { class: 'le-group-title' }, 'Other'), el('div', { class: 'le-var-list' }, ...otherVars.map(([name, value]) => renderVarRow(name, value)))));
     if (!entries.length) wrap.append(el('p', { class: 'le-hint' }, 'This theme has no CSS variables.'));
     return wrap;
@@ -497,16 +588,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     vocabReady = true;
   }
   function onComponentChange(slug) {
-    // Every component-panel edit re-renders the body below (when this slug is showing), which
-    // would orphan a popover anchored to a now-destroyed control — close it first, always.
-    closeActivePopover();
-    refreshChrome();
-    if (activeView === slug) {
-      const body = $('#le-editor-body');
-      body.innerHTML = '';
-      body.append(renderComponentPanel(slug));
-    }
-    for (const item of $$('.le-comp-item')) if (item.dataset.slug === slug) item.dataset.dirty = isComponentDirty(slug) ? '1' : null;
+    refreshChrome(); schedulePreview();
   }
   // A "class" here is whatever the source's cva() literal held for this slot — often a single,
   // very long, space-separated Tailwind utility string (a real shadcn base class routinely runs
@@ -601,7 +683,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
           type: 'button', class: 'le-popover-swatch',
           'data-selected': (prop.kind === 'theme' && prop.value === c.name) ? '1' : null,
           title: c.name,
-          onclick: () => apply({ ...prop, kind: 'theme', value: c.name }),
+          onclick: () => { apply({ ...prop, kind: 'theme', value: c.name }); closeActivePopover(); },
         });
         const sw = el('span', { class: 'le-well le-well--sm' });
         sw.style.background = c.light;
@@ -634,13 +716,13 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
   function scaleControl(prop, scale, apply, { slider = false } = {}) {
     if (slider) {
       const idx = Math.max(0, scale.indexOf(prop.value));
-      const input = el('input', { type: 'range', class: 'le-range', min: '0', max: String(scale.length - 1), step: '1', value: String(idx) });
+      const input = el('input', { type: 'range', class: 'le-range', 'aria-label': propLabel(prop), min: '0', max: String(scale.length - 1), step: '1', value: String(idx) });
       const label = el('code', { class: 'le-range__val' }, prop.value || 'default');
       input.addEventListener('input', () => { label.textContent = scale[Number(input.value)] || 'default'; });
-      input.addEventListener('change', () => apply({ ...prop, value: scale[Number(input.value)] }));
+      input.addEventListener('input', () => apply({ ...prop, value: scale[Number(input.value)] }));
       return el('div', { class: 'le-prop-scale' }, input, label);
     }
-    const select = el('select', { class: 'le-in le-in--sm' },
+    const select = el('select', { class: 'le-in le-in--sm', 'aria-label': propLabel(prop) },
       ...scale.map((v) => el('option', { value: v, selected: v === prop.value ? true : null }, v === '' ? 'default' : v)));
     select.addEventListener('change', () => apply({ ...prop, value: select.value }));
     return select;
@@ -652,8 +734,8 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
         return colorControl(prop, apply);
       case 'radius': return scaleControl(prop, SCALES.RADIUS_SCALE, apply, { slider: true });
       case 'opacity': {
-        const input = el('input', { type: 'range', class: 'le-range', min: '0', max: '100', step: '5', value: prop.value });
-        input.addEventListener('change', () => apply({ ...prop, value: input.value }));
+        const input = el('input', { type: 'range', class: 'le-range', 'aria-label': propLabel(prop), min: '0', max: '100', step: '5', value: prop.value });
+        input.addEventListener('input', () => apply({ ...prop, value: input.value }));
         return el('div', { class: 'le-prop-scale' }, input, el('code', { class: 'le-range__val' }, prop.value));
       }
       case 'spacing': case 'size': return scaleControl(prop, SCALES.SPACING_SCALE, apply);
@@ -690,10 +772,15 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
   // collapses the section mid-typing is the annoyance being prevented.
   let advancedOpen = false;
   function renderStyleEditor(classString, onChange) {
-    const parsed = parseClassList(classString, themeColorNames());
+    let parsed = parseClassList(classString, themeColorNames());
     const wrap = el('div', { class: 'le-props' });
 
-    const applyEdit = (slot, nextProp) => onChange(composeClassList(parsed, new Map([[slot, nextProp]])));
+    const applyEdit = (slot, nextProp) => {
+      const next = composeClassList(parsed, new Map([[slot, nextProp]]));
+      onChange(next);
+      parsed = parseClassList(next, themeColorNames());
+      if (nextProp === null) { closeActivePopover(); renderEditorBody(); }
+    };
 
     for (const prop of parsed.props) {
       const row = el('div', { class: 'le-prop-row', 'data-family': prop.family },
@@ -709,13 +796,14 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     const present = new Set(parsed.props.map((p) => `${p.family}:${p.axis ?? p.side ?? ''}`));
     const addable = ADDABLE.filter((a) => !present.has(`${a.prop.family}:${a.prop.axis ?? a.prop.side ?? ''}`));
     if (addable.length) {
-      const select = el('select', { class: 'le-in le-in--sm le-prop-add' },
+      const select = el('select', { class: 'le-in le-in--sm le-prop-add', 'aria-label': 'Add style property' },
         el('option', { value: '' }, '+ add property'),
         ...addable.map((a, i) => el('option', { value: String(i) }, a.label)));
       select.addEventListener('change', () => {
         const pick = addable[Number(select.value)];
         if (pick) onChange(composeClassList(parsed, new Map(), [pick.prop]));
         select.value = '';
+        renderEditorBody();
       });
       wrap.append(select);
     }
@@ -726,9 +814,9 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
         renderChipList(parsed.rest, {
           onRemove: (cls) => {
             const slot = parsed.slots.findIndex((s) => !s.prop && s.token === cls);
-            if (slot !== -1) onChange(composeClassList(parsed, new Map([[slot, null]])));
+            if (slot !== -1) { onChange(composeClassList(parsed, new Map([[slot, null]]))); renderEditorBody(); }
           },
-          onAdd: (cls) => onChange(parsed.slots.length ? `${composeClassList(parsed)} ${cls}` : cls),
+          onAdd: (cls) => { onChange(parsed.slots.length ? `${composeClassList(parsed)} ${cls}` : cls); renderEditorBody(); },
         }));
       wrap.append(details);
     }
@@ -739,49 +827,39 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     const wrap = el('div', { class: 'le-stack' });
     if (!info) { wrap.append(el('p', { class: 'le-hint le-hint--error' }, 'This component is no longer in the inventory — try Reload.')); return wrap; }
     if (saveIssue && saveIssue.scope === 'component' && saveIssue.slug === slug) wrap.append(el('div', { class: 'le-issue' }, saveIssue.message));
-    wrap.append(el('div', { class: 'le-comp-meta' }, el('code', {}, info.importPath), el('span', { class: 'le-muted' }, info.exportName)));
+    wrap.append(el('details', { class: 'le-advanced le-preview-meta' }, el('summary', {}, 'Source'), el('code', {}, info.importPath), el('span', { class: 'le-muted' }, info.exportName)));
 
-    const hasCva = Boolean(info.cva);
-    const hasParts = Boolean(info.parts && info.parts.length);
-
-    if (!hasCva) {
-      // A cva()-level readOnlyReason (the call existed but failed to parse, or had an unsafe key)
-      // is always worth surfacing even when this component also has parts below; the "no editable
-      // variants" filler only applies when there's truly nothing else on this panel either.
-      if (info.readOnlyReason) wrap.append(el('p', { class: 'le-hint' }, `Read-only: ${info.readOnlyReason}`));
-      else if (!hasParts) wrap.append(el('p', { class: 'le-hint' }, 'This component has no editable variants.'));
-    } else {
+    if (info.readOnlyReason && info.parts?.length) wrap.append(el('p', { class: 'le-hint' }, `Read-only: ${info.readOnlyReason}`));
+    const scopes = [];
+    if (info.cva) {
       ensureDraft(slug);
       const spec = draftComponents.get(slug);
-
-      // The style editor works on one space-separated string; a cva base/value is an ARRAY of
-      // literals, so join for parsing and store any edit back as a single-entry array (printCva
-      // emits that as one literal — same classes, tidier source).
-      wrap.append(el('section', { class: 'le-section' },
-        el('h3', { class: 'le-group-title' }, 'Base'),
-        renderStyleEditor(spec.base.join(' '), (next) => { spec.base = [next]; onComponentChange(slug); })));
-
-      for (const [axis, values] of Object.entries(spec.variants)) wrap.append(renderAxisSection(slug, values, axis));
-
-      if (Object.keys(spec.variants).length) wrap.append(renderDefaultsSection(slug, spec));
-      if (spec.compoundVariants.length) wrap.append(renderCompoundVariantsSection(spec));
+      scopes.push({ id: 'base', label: 'Base · all variants', render: () => renderStyleEditor(spec.base.join(' '), (next) => { spec.base = [next]; onComponentChange(slug); }) });
+      for (const [axis, values] of Object.entries(spec.variants)) for (const [value, classes] of Object.entries(values)) {
+        scopes.push({ id: `variant:${axis}:${value}`, label: `${axis} · ${value}`, render: () => el('div', { 'data-axis': axis }, el('div', { 'data-value': value }, renderStyleEditor(classes.join(' '), (next) => { values[value] = [next]; onComponentChange(slug); }))) });
+      }
+      if (Object.keys(spec.variants).length) scopes.push({ id: 'defaults', label: 'Default variants', render: () => renderDefaultsSection(slug, spec) });
+      if (spec.compoundVariants.length) scopes.push({ id: 'compound', label: 'Compound variants', render: () => renderCompoundVariantsSection(spec) });
     }
-
-    // Below Variants (when present): one row per exported subcomponent's own className literal —
-    // entirely independent of the cva() above (a file can carry both, either, or neither; see
-    // shadcn/parts.ts).
-    if (hasParts) wrap.append(renderPartsSection(slug, info.parts));
+    if (info.parts?.length) {
+      ensureDraftParts(slug);
+      for (const part of info.parts) scopes.push({ id: `part:${part.name}`, label: part.name + (part.readOnlyReason ? ' · read-only' : ''), render: () => renderPartRow(slug, part) });
+    }
+    if (!scopes.length) wrap.append(el('p', { class: 'le-hint' }, info.readOnlyReason ? `Read-only: ${info.readOnlyReason}` : 'This component has no editable styles.'));
+    else {
+      if (!scopes.some((scope) => scope.id === inspectedScope)) inspectedScope = scopes.find((scope) => !scope.label.includes('read-only'))?.id ?? scopes[0].id;
+      const selector = el('select', { class: 'le-in le-scope-select', 'aria-label': 'Style scope' }, ...scopes.map((scope) => el('option', { value: scope.id, selected: scope.id === inspectedScope }, scope.label)));
+      selector.addEventListener('change', () => { closeActivePopover(); inspectedScope = selector.value; renderEditorBody(); });
+      wrap.append(el('label', { class: 'le-field' }, el('span', { class: 'le-label' }, 'Editing'), selector));
+      wrap.append(el('p', { class: 'le-hint' }, inspectedScope === 'base' ? 'Changes apply to every instance. A variant may override a base property.' : 'Changes apply to every matching instance in your library.'));
+      wrap.append(el('section', { class: 'le-section' }, scopes.find((scope) => scope.id === inspectedScope).render()));
+      if (info.cva) wrap.append(renderVariantManager(slug, draftComponents.get(slug)));
+    }
 
     return wrap;
   }
 
   // ---- Parts section: one row per exported subcomponent (shadcn/parts.ts's PartInfo) -----------
-  function renderPartsSection(slug, parts) {
-    ensureDraftParts(slug);
-    return el('section', { class: 'le-section', 'data-parts': '1' },
-      el('h3', { class: 'le-group-title' }, 'Parts'),
-      el('div', { class: 'le-parts-list' }, ...parts.map((part) => renderPartRow(slug, part))));
-  }
   function renderPartRow(slug, part) {
     const row = el('div', { class: 'le-part-row', 'data-part': part.name });
     row.append(el('code', { class: 'le-part-name' }, part.name));
@@ -805,30 +883,22 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
       renderStyleEditor(draft[part.name], (next) => { draft[part.name] = next; onComponentChange(slug); }));
     if (part.dynamicTail) line.append(el('code', { class: 'le-part-tail', title: part.dynamicTail }, `+ ${part.dynamicTail}`));
     row.append(line);
+    if (part.previewChild) row.append(el('p', { class: 'le-hint' }, `Editing the ${part.previewChild.wrapperTag} wrapper. Nested ${part.previewChild.tag} styles come from the source.`));
     if (part.note) row.append(el('p', { class: 'le-hint le-part-note' }, part.note));
     return row;
   }
-  function renderAxisSection(slug, values, axis) {
-    const section = el('section', { class: 'le-section', 'data-axis': axis });
-    const table = el('div', { class: 'le-axis-table' });
-    for (const [value, classes] of Object.entries(values)) {
-      table.append(el('div', { class: 'le-axis-row', 'data-value': value },
-        el('code', { class: 'le-axis-value' }, value),
-        renderStyleEditor(classes.join(' '), (next) => { values[value] = [next]; onComponentChange(slug); })));
-    }
-    const addValue = el('button', {
-      type: 'button', class: 'le-add',
-      onclick: () => {
-        const name = window.prompt(`New value name for "${axis}":`);
-        const trimmed = name?.trim();
-        if (!trimmed || values[trimmed]) return;
-        const sibling = Object.values(values).at(-1) ?? [];
-        values[trimmed] = [...sibling];
-        onComponentChange(slug);
+  function renderVariantManager(slug, spec) {
+    const wrap = el('details', { class: 'le-advanced' }, el('summary', {}, 'Manage variants'));
+    for (const [axis, values] of Object.entries(spec.variants)) wrap.append(el('button', {
+      type: 'button', class: 'le-add', onclick: () => {
+        const name = window.prompt(`New value name for "${axis}":`)?.trim();
+        if (!name || Object.hasOwn(values, name)) return;
+        Object.defineProperty(values, name, { value: [...(Object.values(values).at(-1) ?? [])], enumerable: true, configurable: true, writable: true });
+        inspectedScope = `variant:${axis}:${name}`;
+        onComponentChange(slug); renderEditorBody();
       },
-    }, '+ add value');
-    section.append(el('h3', { class: 'le-group-title' }, axis), table, addValue);
-    return section;
+    }, `+ Add ${axis} value`));
+    return wrap;
   }
   function renderDefaultsSection(slug, spec) {
     const section = el('section', { class: 'le-section' }, el('h3', { class: 'le-group-title' }, 'Defaults'));
@@ -866,7 +936,22 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
     e.returnValue = '';
   });
 
-  detectStorybook().then(() => loadFullPreview());
+  const mobileRail = window.matchMedia('(max-width: 820px)');
+  const syncRail = () => { if ($('#le-library-navigation')) $('#le-library-navigation').open = !mobileRail.matches; };
+  mobileRail.addEventListener('change', syncRail); syncRail();
+  $('#le-search')?.addEventListener('input', renderRail);
+  $('#le-example')?.addEventListener('change', (event) => { previewPage = event.target.value; resetPreviewScroll = true; loadFullPreview(); });
+  $('#le-preview-mode')?.addEventListener('change', (event) => { previewMode = event.target.value; loadFullPreview(); });
+  $('#le-device')?.addEventListener('change', (event) => { $('#le-preview-frame').dataset.device = event.target.value; });
+  $('#le-reset')?.addEventListener('click', () => {
+    if (saving || !state) return;
+    closeActivePopover(); draftTheme = clone(state.theme); draftComponents.clear(); draftParts.clear();
+    saveIssue = null; renderAll(); loadFullPreview(); status('Draft reset');
+  });
+  detectStorybook().then(() => {
+    const option = $('#le-preview-mode option[value="storybook"]');
+    if (option) option.disabled = !storybookUrl;
+  });
   loadState().catch((e) => {
     const body = $('#le-editor-body');
     body.innerHTML = '';

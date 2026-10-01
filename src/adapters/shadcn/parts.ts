@@ -436,7 +436,22 @@ function walkJsxElement(name: string, source: string, tagStart: number, limit: n
   let fallback: PartInfo | undefined;
   if (attr) {
     const resolved = resolveAttrValue(name, source, attr);
-    if (resolved.classes !== undefined) return { end: openEnd, part: resolved };
+    if (resolved.classes !== undefined) {
+      // Read-only structure for a native wrapper around one self-closing native element (Table).
+      // The editable span remains the first literal; never evaluate expressions or child exports.
+      const wrapperTag = /^<([a-z][a-z0-9-]*)\b/.exec(source.slice(tagStart, openEnd))?.[1];
+      const childStart = skipWsAndComments(source, openEnd, limit);
+      const childTag = /^<([a-z][a-z0-9-]*)\b/.exec(source.slice(childStart, limit))?.[1];
+      if (!selfClosing && wrapperTag && childTag) {
+        const child = scanOpenTag(source, childStart, limit);
+        const afterChild = skipWsAndComments(source, child.end, limit);
+        if (child.selfClosing && child.attr && source.startsWith(`</${wrapperTag}`, afterChild)) {
+          const childPart = resolveAttrValue(name, source, child.attr);
+          if (childPart.classes !== undefined) resolved.previewChild = { wrapperTag, tag: childTag, classes: childPart.classes };
+        }
+      }
+      return { end: openEnd, part: resolved };
+    }
     fallback = resolved; // dynamic/escaped/interpolated — a candidate reason, not a match
   }
   if (selfClosing) return { end: openEnd, fallback };

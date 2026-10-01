@@ -978,7 +978,7 @@ test('GET / serves the bundled library-studio editor shell', async (t) => {
   const res = await f.request('/');
   assert.equal(res.status, 200);
   assert.match(String(res.headers['content-type']), /text\/html/);
-  assert.match(res.text, /Canon library studio/);
+  assert.match(res.text, /<title>Canon · Library Studio<\/title>/);
 });
 
 test('same-origin/host checks still apply to the library-mode server', async (t) => {
@@ -1006,4 +1006,59 @@ test('a NATIVE (non-adapter) project still serves the native studio, unaffected 
 
   const libRes = await request('/api/lib/state');
   assert.equal(libRes.status, 404, 'native mode never exposes library-mode endpoints');
+});
+
+test('draft preview applies component variants and parts across page instances without writing source', async (t) => {
+  const { request, root } = await libFixture(t, { extraFiles: { 'src/ui/card.tsx': 'export function Card({ className }) { return <div className={cn("rounded-lg border", className)} /> }\nexport function CardTitle({ className }) { return <div className={cn("text-xl", className)} /> }' } });
+  const before = (await request('/api/lib/state')).json();
+  const button = before.components.find((c: any) => c.slug === 'button');
+  const card = before.components.find((c: any) => c.slug === 'card');
+  const part = card.parts.find((p: any) => p.name === 'CardTitle');
+  const spec = structuredClone(button.cva);
+  spec.base = ['rounded-full', 'px-8'];
+  spec.variants.variant.default = ['bg-destructive'];
+  const response = await request('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+    theme: before.theme, components: { button: spec }, parts: { card: { [part.name]: 'text-3xl' } }, page: 'settings',
+  }) });
+  assert.equal(response.status, 200, response.text.slice(0, 500));
+  assert.ok((response.text.match(/data-inspect="button"/g) ?? []).length >= 3);
+  assert.match(response.text, /class="rounded-full bg-destructive h-9 px-4 py-2/);
+  assert.match(response.text, /data-part="CardTitle"[^>]*class="text-3xl"/);
+  assert.deepEqual((await request('/api/lib/state')).json(), before);
+  assert.ok(readFileSync(join(root, 'src/ui/button.tsx'), 'utf8').includes('cva('));
+});
+
+test('draft preview rejects unknown and read-only targets instead of silently dropping edits', async (t) => {
+  const { request } = await libFixture(t);
+  const state = (await request('/api/lib/state')).json();
+  for (const draft of [{ parts: { missing: { Nope: 'p-4' } } }, { parts: { button: { Nope: 'p-4' } } }]) {
+    const response = await request('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: state.theme, ...draft }) });
+    assert.equal(response.status, 422);
+  }
+});
+
+test('state and draft preview retain the theme file utility mapping without accepting draft overrides', async (t) => {
+  const { root, request } = await libFixture(t);
+  const path = join(root, 'app/globals.css');
+  writeFileSync(path, readFileSync(path, 'utf8') + '\n@theme inline { --radius-md: calc(var(--radius) * 0.8); }\n');
+  const state = (await request('/api/lib/state')).json();
+  assert.equal(state.theme.utilityTheme['radius-md'], 'calc(var(--radius) * 0.8)');
+  state.theme.utilityTheme['radius-md'] = '900px';
+  const response = await request('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: state.theme }) });
+  assert.equal(response.status, 200);
+  assert.match(response.text, /--radius-md: calc\(var\(--radius\) \* 0\.8\);/);
+  assert.doesNotMatch(response.text, /--radius-md: 900px/);
+});
+
+test('draft preview uses the project base layer without accepting client stylesheet overrides', async (t) => {
+  const { root, request } = await libFixture(t);
+  const path = join(root, 'app/globals.css');
+  writeFileSync(path, readFileSync(path, 'utf8') + '\n@layer base { * { @apply border-border outline-ring/50; } body { @apply text-sm; } }\n');
+  const state = (await request('/api/lib/state')).json();
+  assert.match(state.theme.baseCss, /@apply border-border outline-ring\/50/);
+  state.theme.baseCss = 'body { color: red; }';
+  const response = await request('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: state.theme }) });
+  assert.equal(response.status, 200);
+  assert.match(response.text, /@layer base \{[^]*@apply border-border outline-ring\/50/);
+  assert.doesNotMatch(response.text, /body \{ color: red; \}/);
 });

@@ -529,3 +529,11 @@ test('writePart is exposed on the shadcn adapter object', async () => {
   const { shadcnAdapter } = await import('../src/adapters/shadcn/index.ts');
   assert.equal(typeof shadcnAdapter.writePart, 'function');
 });
+
+test('a static native wrapper records its direct styled child for preview without changing the editable span', () => {
+  const source = 'export function Table({ className }) { return <div className="relative w-full overflow-x-auto"><table className={cn("w-full text-sm", className)} /></div> }';
+  const [part] = parseParts(source);
+  assert.equal(part.classes, 'relative w-full overflow-x-auto');
+  assert.deepEqual(part.previewChild, { wrapperTag: 'div', tag: 'table', classes: 'w-full text-sm' });
+  assert.equal(source.slice(part.span!.start, part.span!.end), '"relative w-full overflow-x-auto"');
+});

@@ -241,3 +241,26 @@ test('a part literal containing a quote (legit Tailwind arbitrary-value syntax) 
   assert.throws(() => writePart(quotePart, 'QuoteLiteral', "after:content-['']"), /unsafe class string/);
   assert.equal(readFileSync(quotePart.file, 'utf8'), before, 'a refused writePart call must never touch the file');
 });
+
+test('writeVariants preserves opaque source selectors while saving a safe base edit and rejects new opaque tokens', (t) => {
+  const root = clone(t);
+  const file = join(root, 'src/ui/button.tsx');
+  const selector = "[&_svg:not([class*='size-'])]:size-4";
+  writeFileSync(file, readFileSync(file, 'utf8').replace('inline-flex items-center', `${selector} inline-flex items-center`));
+  const button = inventory(root).find((component) => component.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.base = spec.base.map((value) => value.replace('rounded-md', 'rounded-full'));
+  const write = writeVariants(button, spec);
+  assert.match(write.content.toString(), /rounded-full/);
+  assert.ok(write.content.toString().includes(selector));
+  spec.base.push("[&_svg:not([class*='new-'])]:size-8");
+  assert.throws(() => writeVariants(button, spec), /unsafe class string/);
+});
+
+test('opaque selector preservation trusts fresh source, never client-supplied component metadata or a different scope', (t) => {
+  const root = clone(t);
+  const button = inventory(root).find((component) => component.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.base.push("after:content-['new']");
+  assert.throws(() => writeVariants({ ...button, cva: spec }, spec), /unsafe class string/);
+});

@@ -154,6 +154,7 @@ test('opening Dialog lists its parts: DialogContent editable with chips, DialogT
   await item.click();
   assert.equal(await page.locator('#le-editor-title').innerText(), 'Dialog');
 
+  await page.locator('.le-scope-select').selectOption('part:DialogContent');
   const contentRow = page.locator('.le-part-row[data-part="DialogContent"]');
   await contentRow.waitFor({ state: 'visible', timeout: 5000 });
   // The structured editor renders property rows for recognized families and an Advanced chip
@@ -164,6 +165,7 @@ test('opening Dialog lists its parts: DialogContent editable with chips, DialogT
   assert.ok(await contentRow.locator('.le-chip').count() >= 1, 'Advanced holds the untyped tokens as chips');
   assert.match(await contentRow.locator('.le-part-tail').innerText(), /className/, 'DialogContent\'s dynamic tail (the cn(...) className arg) is shown muted beside the editor');
 
+  await page.locator('.le-scope-select').selectOption('part:DialogTrigger');
   const triggerRow = page.locator('.le-part-row[data-part="DialogTrigger"]');
   await triggerRow.waitFor({ state: 'visible', timeout: 5000 });
   assert.equal(await triggerRow.locator('.le-chip').count(), 0, 'DialogTrigger (a plain DialogPrimitive.Trigger alias) is read-only: no chips');
@@ -177,6 +179,7 @@ test('DialogContent\'s background color property shows ONE well + the theme name
   await item.waitFor({ state: 'visible', timeout: 5000 });
   await item.click();
 
+  await page.locator('.le-scope-select').selectOption('part:DialogContent');
   const contentRow = page.locator('.le-part-row[data-part="DialogContent"]');
   await contentRow.waitFor({ state: 'visible', timeout: 5000 });
   // DialogContent's literal includes `bg-background` — the Background property row's control is a
@@ -217,6 +220,7 @@ test('adding a class to DialogContent through the Parts chip editor and saving s
   await item.waitFor({ state: 'visible', timeout: 5000 });
   await item.click();
 
+  await page.locator('.le-scope-select').selectOption('part:DialogContent');
   const contentRow = page.locator('.le-part-row[data-part="DialogContent"]');
   await contentRow.waitFor({ state: 'visible', timeout: 5000 });
   const save = page.locator('#le-save');
@@ -245,9 +249,98 @@ test('adding a class to DialogContent through the Parts chip editor and saving s
   await page.reload({ waitUntil: 'domcontentloaded' });
   await item.waitFor({ state: 'visible', timeout: 5000 });
   await item.click();
+  await page.locator('.le-scope-select').selectOption('part:DialogContent');
   const reloadedRow = page.locator('.le-part-row[data-part="DialogContent"]');
   await reloadedRow.waitFor({ state: 'visible', timeout: 5000 });
   await reloadedRow.locator('.le-advanced > summary').click(); // unrecognized token lives in Advanced
   assert.match(await reloadedRow.innerText(), /canon-part-e2e/, 'the persisted class is shown after a fresh state load');
   assert.ok(await page.locator('#le-save').isDisabled(), 'freshly-loaded state must not start dirty');
+});
+
+async function setInspectedColor(page: Page, value: string) {
+  await page.locator('#le-editor-body .le-prop-row[data-family="background"] .le-prop-color-trigger').click();
+  const field = page.locator('.le-popover input[placeholder="#hex / oklch(…)"]');
+  await field.fill(value);
+  await field.press('Enter');
+  await page.keyboard.press('Escape');
+}
+async function waitForDraftButtonColor(page: Page, color: string) {
+  await page.waitForFunction((expected) => {
+    const doc = (document.querySelector('#le-preview-frame') as HTMLIFrameElement)?.contentDocument;
+    const buttons = [...(doc?.querySelectorAll('[data-inspect="button"][data-variant="default"]') ?? [])];
+    return buttons.length >= 2 && buttons.every((button) => doc!.defaultView!.getComputedStyle(button).backgroundColor === expected);
+  }, color);
+}
+
+test('live draft updates every matching variant before Save, keeps other variants unchanged, and Save writes shared source', async t => {
+  const { page, buttonFile } = await libStudio(t);
+  const before = readFileSync(buttonFile, 'utf8');
+  await page.locator('#le-example').selectOption('settings');
+  const frame = page.frameLocator('#le-preview-frame');
+  const button = frame.locator('[data-inspect="button"][data-variant="default"]').first();
+  await button.click();
+  assert.equal(await page.locator('.le-scope-select').inputValue(), 'variant:variant:default');
+  assert.equal(await page.locator('#le-example').inputValue(), 'settings');
+  const outlineBefore = await frame.locator('[data-inspect="button"][data-variant="outline"]').first().evaluate((node) => getComputedStyle(node).backgroundColor);
+  await setInspectedColor(page, '#ff0000');
+  await waitForDraftButtonColor(page, 'rgb(255, 0, 0)');
+  assert.equal(readFileSync(buttonFile, 'utf8'), before, 'live preview never writes source');
+  assert.equal(await frame.locator('[data-inspect="button"][data-variant="outline"]').first().evaluate((node) => getComputedStyle(node).backgroundColor), outlineBefore);
+  await page.locator('#le-save').click();
+  await page.waitForFunction(() => document.querySelector('#le-status')?.textContent === 'saved');
+  assert.match(readFileSync(buttonFile, 'utf8'), /bg-\[#ff0000\]/);
+  assert.equal(await page.locator('#le-example').inputValue(), 'settings');
+});
+
+test('edits during an in-flight Save remain unsaved in the inspector and canvas', async t => {
+  const { page, buttonFile } = await libStudio(t);
+  await page.locator('#le-example').selectOption('settings');
+  await page.frameLocator('#le-preview-frame').locator('[data-inspect="button"][data-variant="default"]').first().click();
+  await setInspectedColor(page, '#ff0000');
+  await waitForDraftButtonColor(page, 'rgb(255, 0, 0)');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let accepted!: () => void;
+  const received = new Promise<void>((resolve) => { accepted = resolve; });
+  await page.route('**/api/lib/save', async (route) => {
+    const response = await route.fetch(); accepted(); await gate; await route.fulfill({ response });
+  });
+  await page.locator('#le-save').click(); await received;
+  await setInspectedColor(page, '#0000ff');
+  release();
+  await page.waitForFunction(() => document.querySelector('#le-status')?.textContent?.includes('newer edits remain unsaved'));
+  await waitForDraftButtonColor(page, 'rgb(0, 0, 255)');
+  assert.ok(await page.locator('#le-save').isEnabled());
+  assert.match(readFileSync(buttonFile, 'utf8'), /bg-\[#ff0000\]/);
+  assert.doesNotMatch(readFileSync(buttonFile, 'utf8'), /bg-\[#0000ff\]/);
+});
+
+test('late preview responses cannot replace a newer draft and Reset preserves page and device', async t => {
+  const { page, buttonFile } = await libStudio(t);
+  const before = readFileSync(buttonFile, 'utf8');
+  await page.locator('#le-example').selectOption('settings');
+  await page.locator('#le-device').selectOption('mobile');
+  await page.frameLocator('#le-preview-frame').locator('[data-inspect="button"][data-variant="default"]').first().click();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let accepted!: () => void;
+  const received = new Promise<void>((resolve) => { accepted = resolve; });
+  let delayed = false;
+  await page.route('**/api/lib/preview', async (route) => {
+    if (!delayed && route.request().postData()?.includes('#ff0000')) {
+      delayed = true;
+      const response = await route.fetch(); accepted(); await gate;
+      await route.fulfill({ response }).catch(() => {}); return;
+    }
+    await route.continue();
+  });
+  await setInspectedColor(page, '#ff0000'); await received;
+  await setInspectedColor(page, '#0000ff');
+  await waitForDraftButtonColor(page, 'rgb(0, 0, 255)');
+  release();
+  await page.locator('#le-reset').click();
+  await page.waitForFunction(() => (document.querySelector('#le-save') as HTMLButtonElement)?.disabled);
+  assert.equal(await page.locator('#le-example').inputValue(), 'settings');
+  assert.equal(await page.locator('#le-device').inputValue(), 'mobile');
+  assert.equal(readFileSync(buttonFile, 'utf8'), before);
 });
