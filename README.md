@@ -8,6 +8,8 @@ Canon is an open-source design system for apps built with coding agents. It prov
 
 [Documentation and connection prompt](https://marcosdocanto.github.io/canon/) · [Explore the Studio](https://marcosdocanto.github.io/canon/preview.html) · [Contribute](CONTRIBUTING.md)
 
+The Library Studio interface is built with React and shadcn/ui controls. Its JavaScript and Tailwind CSS are bundled with the CLI, so the editor works offline without adding runtime dependencies to your project. Studio chrome uses its own neutral theme; the preview uses your library’s editable theme.
+
 ## Connect your agent
 
 Paste this into your coding agent's conversation for a new or existing project:

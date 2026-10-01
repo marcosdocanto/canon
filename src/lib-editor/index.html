@@ -5,46 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <title>Canon · Library Studio</title>
-<link rel="stylesheet" href="editor-lib.css">
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div class="le-app" id="le-app">
-  <header class="le-topbar">
-    <div class="le-brand"><span class="le-brand__mark" aria-hidden="true">C</span><strong>Canon</strong><span class="le-brand__divider" aria-hidden="true">/</span><span class="le-brand__subtitle">Library Studio</span></div>
-    <div class="le-topbar__actions">
-      <span class="le-status" id="le-status" role="status" aria-live="polite"></span>
-      <button type="button" class="le-btn le-btn--quiet" id="le-reset" disabled>Reset</button>
-      <button type="button" class="le-btn le-btn--primary" id="le-save" disabled>Save</button>
-    </div>
-  </header>
-  <aside class="le-rail" aria-label="Library">
-    <details class="le-library-navigation" id="le-library-navigation" open>
-      <summary>Library <span aria-hidden="true">⌄</span></summary>
-      <div class="le-rail__content">
-        <label class="le-search"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><input type="search" id="le-search" placeholder="Find a component…" aria-label="Find a component" autocomplete="off" spellcheck="false"></label>
-        <button type="button" class="le-nav-item le-nav-item--theme" id="le-tab-theme" data-active="1"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="6.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg><span class="le-nav-item__name">Theme</span></button>
-        <div class="le-rail__heading">Components</div>
-        <nav class="le-comp-list" id="le-component-list" aria-label="Components"></nav>
-      </div>
-    </details>
-  </aside>
-  <main class="le-preview" aria-label="Preview">
-    <div class="le-preview__head">
-      <label class="le-toolbar-field"><span class="le-sr-only">Example</span><select id="le-example" aria-label="Example"><option value="dashboard">Overview</option><option value="settings">Settings</option><option value="components">Components</option></select></label>
-      <span class="le-toolbar-divider" aria-hidden="true"></span>
-      <label class="le-toolbar-field"><span class="le-sr-only">Preview mode</span><select id="le-preview-mode" aria-label="Preview mode"><option value="draft">Live draft</option><option value="storybook" disabled>Saved React</option></select></label>
-      <span class="le-preview__spacer"></span>
-      <label class="le-toolbar-field le-toolbar-field--device"><span class="le-sr-only">Preview size</span><select id="le-device" aria-label="Preview size"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label>
-    </div>
-    <div class="le-preview__viewport"><iframe class="le-preview__frame" id="le-preview-frame" title="Library preview"></iframe></div>
-    <div class="le-preview__footer"><span id="le-preview-status" role="status" aria-live="polite">Loading preview…</span></div>
-  </main>
-  <section class="le-editor" aria-labelledby="le-editor-title">
-    <div class="le-editor__head"><strong id="le-editor-title">Theme</strong><span class="le-editor__caption">Properties</span></div>
-    <div class="le-banner" id="le-banner" hidden></div>
-    <div class="le-editor__body" id="le-editor-body"><p class="le-hint">Loading…</p></div>
-  </section>
-</div>
-<script type="module" src="editor-lib.js"></script>
+<div id="root"></div>
+<script type="module" src="app.js"></script>
 </body>
 </html>

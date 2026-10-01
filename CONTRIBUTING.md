@@ -26,7 +26,7 @@ On Linux, Playwright may also need system libraries; use `npx playwright install
 | `node --test tests/engine.test.ts` | Run one test file while changing that area. |
 | `npm run build` | Compile the distributable runtime into `lib/`. |
 
-The checkout CLI runs current source with `node bin/canon.js`; it does not require a global installation. `npm run build` compiles Canon itself. `node bin/canon.js build --design <path>` generates a design's CSS, references and previews.
+The `npm ci` prepare step builds the offline React/shadcn Library Studio assets. After changing `studio/`, run `npm run build:studio` (the test and package build commands also rebuild them). The checkout CLI runs current source with `node bin/canon.js`; it does not require a global installation. `npm run build` compiles Canon itself. `node bin/canon.js build --design <path>` generates a design's CSS, references and previews.
 
 ## Find the right source
 
