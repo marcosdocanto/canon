@@ -49,6 +49,23 @@ function composedStory(component: ComponentInfo): { jsx: string; imports: string
   ].filter(Boolean).join('\n    ');
 
   const used = [name, ...roles.map((r) => name + r)].filter((n) => styled.has(n) || exported.has(n));
+
+  // Overlay families (Dialog, Drawer, Sheet, AlertDialog…): the root is a stateful Radix provider
+  // that renders NOTHING until open, and children belong inside <NameContent>. Detect by shape —
+  // an unstyled root with a styled Content part — and emit the real open composition.
+  const rootPart = parts.find((p) => p.name === name);
+  const isOverlay = has('Content') && (!rootPart || rootPart.classes === undefined);
+  if (isOverlay) {
+    const inner = [
+      header,
+      has('Footer') ? tag('Footer', 'Footer') : '',
+    ].filter(Boolean).join('\n      ');
+    return {
+      jsx: `  <${name} defaultOpen>\n    <${name}Content>\n      ${inner || `${name} content`}\n    </${name}Content>\n  </${name}>`,
+      imports: used,
+    };
+  }
+
   return {
     jsx: `  <${name} style={{ width: 360 }}>\n    ${body}\n  </${name}>`,
     imports: used,
