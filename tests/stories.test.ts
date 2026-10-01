@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inventory } from '../src/adapters/shadcn/inventory.ts';
 import { shadcnAdapter } from '../src/adapters/shadcn/index.ts';
 import { installFiles } from '../src/design-files.ts';
 import { GENERATED_MARK, ensureStorybook, storyWrites } from '../src/generators/stories.ts';
+import { exclusionReason } from '../src/generators/story-catalog.ts';
 import { clone } from './fixtures/clone.ts';
 
 test('storyWrites generates a marked story per component, one element per render example', (t) => {
@@ -193,4 +195,128 @@ test('ensureStorybook surfaces a failed init', async (t) => {
     () => ensureStorybook(root, async () => ({ status: 1, stdout: '', stderr: 'boom' })),
     /boom/,
   );
+});
+
+// --- Curated catalog ---------------------------------------------------------------------------
+
+test('a cataloged slug (accordion) gets its curated two-item example, not a bare default element', (t) => {
+  const root = clone(t);
+  const components = inventory(root);
+  const writes = storyWrites(root, shadcnAdapter, components);
+
+  const accordion = writes.find((w) => w.path === join(root, 'stories', 'canon', 'accordion.stories.tsx'))!;
+  assert.ok(accordion, 'accordion story is written');
+  const content = accordion.content.toString('utf8');
+  assert.ok(content.startsWith(GENERATED_MARK));
+  assert.match(content, /import \{ Accordion, AccordionItem, AccordionTrigger, AccordionContent \} from '~\/ui\/accordion';/);
+  assert.match(content, /type="single" defaultValue="item-1"/);
+  // two real items, not the generic single "…" placeholder the axis-based fallback would emit
+  assert.equal((content.match(/<AccordionItem /g) ?? []).length, 2);
+  assert.ok(content.includes('Is it accessible?'));
+  assert.ok(!content.includes('>…<'), 'curated example never falls back to the generic ellipsis filler');
+});
+
+test('a labeled control (checkbox) imports the real Label from the sibling ui module when it exists', (t) => {
+  const root = clone(t);
+  const components = inventory(root);
+  const writes = storyWrites(root, shadcnAdapter, components);
+
+  const checkbox = writes.find((w) => w.path === join(root, 'stories', 'canon', 'checkbox.stories.tsx'))!;
+  const content = checkbox.content.toString('utf8');
+  assert.match(content, /import \{ Checkbox \} from '~\/ui\/checkbox';/);
+  assert.match(content, /import \{ Label \} from '~\/ui\/label';/);
+  assert.match(content, /<Label htmlFor="story-checkbox">Accept terms and conditions<\/Label>/);
+});
+
+test('a labeled control (checkbox) falls back to a plain <label> — never a guessed import — when the project has no label component', (t) => {
+  const root = clone(t);
+  rmSync(join(root, 'src', 'ui', 'label.tsx')); // this project never adopted a `label` component
+  const components = inventory(root);
+  const writes = storyWrites(root, shadcnAdapter, components);
+
+  const checkbox = writes.find((w) => w.path === join(root, 'stories', 'canon', 'checkbox.stories.tsx'))!;
+  const content = checkbox.content.toString('utf8');
+  assert.doesNotMatch(content, /from '~\/ui\/label'/, 'never imports a component that was verified absent from the inventory');
+  assert.doesNotMatch(content, /<Label\b/);
+  assert.match(content, /<label htmlFor="story-checkbox">Accept terms and conditions<\/label>/);
+});
+
+// --- Exclusion mechanism -----------------------------------------------------------------------
+
+test('an excluded slug (direction) gets no story written at all', (t) => {
+  const root = clone(t);
+  const components = inventory(root);
+  assert.ok(components.some((c) => c.slug === 'direction'), 'fixture has a direction component to exclude');
+
+  const writes = storyWrites(root, shadcnAdapter, components);
+  assert.ok(!writes.some((w) => w.path === join(root, 'stories', 'canon', 'direction.stories.tsx')));
+  // the rest of the batch is unaffected
+  assert.ok(writes.some((w) => w.path === join(root, 'stories', 'canon', 'button.stories.tsx')));
+});
+
+test('storyWrites deletes a previously generated (GENERATED_MARK) story for a slug that is now excluded — stale cleanup', (t) => {
+  const root = clone(t);
+  const components = inventory(root);
+  const storiesDir = join(root, 'stories', 'canon');
+  mkdirSync(storiesDir, { recursive: true });
+  const target = join(storiesDir, 'direction.stories.tsx');
+  writeFileSync(target, `${GENERATED_MARK}\n// stale: direction used to be generated before it was excluded\n`);
+
+  storyWrites(root, shadcnAdapter, components); // side effect: deletes the stale excluded file
+  assert.throws(() => readFileSync(target), /ENOENT/);
+});
+
+test('storyWrites never deletes a hand-edited (unmarked) story for an excluded slug', (t) => {
+  const root = clone(t);
+  const components = inventory(root);
+  const storiesDir = join(root, 'stories', 'canon');
+  mkdirSync(storiesDir, { recursive: true });
+  const target = join(storiesDir, 'direction.stories.tsx');
+  writeFileSync(target, '// hand-written story for direction, not generated\nexport default {};\n');
+
+  storyWrites(root, shadcnAdapter, components);
+  assert.equal(readFileSync(target, 'utf8'), '// hand-written story for direction, not generated\nexport default {};\n');
+});
+
+test('exclusionReason: chart is excluded only when the target project has no recharts dependency', (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), 'canon chart-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const chart = { slug: 'chart', file: '/fake/chart.tsx', exportName: 'ChartContainer', importPath: '~/ui/chart' };
+
+  writeFileSync(join(tmp, 'package.json'), JSON.stringify({ dependencies: {} }));
+  assert.match(exclusionReason(chart, tmp)!, /recharts/);
+
+  writeFileSync(join(tmp, 'package.json'), JSON.stringify({ dependencies: { recharts: '^3.0.0' } }));
+  assert.equal(exclusionReason(chart, tmp), undefined);
+});
+
+// --- composedStory (compound fallback) bugfix ---------------------------------------------------
+
+test('a compound family with Title/Description directly under its root (no Header wrapper, e.g. shadcn\'s own Alert) composes them unwrapped instead of silently dropping them', (t) => {
+  const root = clone(t);
+  writeFileSync(join(root, 'src', 'ui', 'callout.tsx'), [
+    'import * as React from "react"',
+    '',
+    'function Callout({ className, ...props }: React.ComponentProps<"div">) {',
+    '  return <div className={className} {...props} />',
+    '}',
+    'function CalloutTitle({ className, ...props }: React.ComponentProps<"div">) {',
+    '  return <div className={className} {...props} />',
+    '}',
+    'function CalloutDescription({ className, ...props }: React.ComponentProps<"div">) {',
+    '  return <div className={className} {...props} />',
+    '}',
+    '',
+    'export { Callout, CalloutTitle, CalloutDescription }',
+    '',
+  ].join('\n'));
+
+  const components = inventory(root);
+  const writes = storyWrites(root, shadcnAdapter, components);
+  const callout = writes.find((w) => w.path === join(root, 'stories', 'canon', 'callout.stories.tsx'))!;
+  const content = callout.content.toString('utf8');
+
+  assert.ok(content.includes('<CalloutTitle>Callout title</CalloutTitle>'), 'Title is rendered even with no CalloutHeader to wrap it');
+  assert.ok(content.includes('Supporting description for this component.'), 'Description is rendered too');
+  assert.doesNotMatch(content, /<Callout style=\{\{ width: 360 \}\}>\s*<\/Callout>/, 'never composes to an empty box');
 });
