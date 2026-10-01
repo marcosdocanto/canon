@@ -147,10 +147,58 @@ function readOnlyPartMarkup(part: PartInfo): string {
   return `<p class="cn-lib-part-readonly" data-part="${escapeHtml(part.name)}">${escapeHtml(part.name)}: ${escapeHtml(reason)}</p>`;
 }
 
-/** One `<div class="cn-lib-parts">` holding every part of a component: styled ones as elements, read-only ones as muted name+reason lines, in the same order `parseParts` returned them. */
-function partsBlock(parts: PartInfo[]): string {
-  const items = parts.map((part) => (part.classes !== undefined ? styledPartMarkup(part) : readOnlyPartMarkup(part)));
-  return `<div class="cn-lib-parts">${items.join('\n')}</div>`;
+/**
+ * Compound-component composition: when a component's parts follow the Root/Header/Title/
+ * Description/Content/Footer naming convention (Card, AlertDialog, Dialog…), render ONE assembled
+ * example — the real nested structure with each part's real classes and plausible text — instead
+ * of a loose grid of fragments. A designer looking at "Card" must see a card.
+ */
+const COMPOSE_ROLES = ['Header', 'Title', 'Description', 'Action', 'Content', 'Footer'] as const;
+const ROLE_TEXT: Record<string, string> = {
+  Title: 'Card title', Description: 'Supporting description text for this component.',
+  Content: 'Body content goes here — the real classes of every part are applied.',
+  Footer: 'Footer', Action: 'Action',
+};
+
+function composedMarkup(componentName: string, parts: PartInfo[]): string | undefined {
+  const byRole = new Map<string, PartInfo>();
+  let root: PartInfo | undefined;
+  for (const part of parts) {
+    if (part.classes === undefined) continue;
+    if (part.name === componentName) { root = part; continue; }
+    const role = COMPOSE_ROLES.find((r) => part.name === componentName + r);
+    if (role && !byRole.has(role)) byRole.set(role, part);
+  }
+  // A composition is only clearer than tiles when there's a styled root AND ≥2 styled roles.
+  if (!root || byRole.size < 2) return undefined;
+
+  const div = (part: PartInfo, text: string, children = '') =>
+    `<div class="${escapeHtml(part.classes!)}">${children || escapeHtml(text)}</div>`;
+
+  const header = byRole.get('Header');
+  const headerChildren = [byRole.get('Title'), byRole.get('Description'), byRole.get('Action')]
+    .filter((p): p is PartInfo => Boolean(p))
+    .map((p) => div(p, ROLE_TEXT[p.name.replace(componentName, '')] ?? p.name))
+    .join('');
+  const pieces = [
+    header ? div(header, '', headerChildren || escapeHtml('Header')) : '',
+    byRole.has('Content') ? div(byRole.get('Content')!, ROLE_TEXT.Content) : '',
+    byRole.has('Footer') ? div(byRole.get('Footer')!, ROLE_TEXT.Footer) : '',
+  ].join('');
+  const composedNames = [componentName, ...[...byRole.keys()].map((r) => componentName + r)];
+  return `<figure class="cn-lib-composed" data-composed="${escapeHtml(composedNames.join(' '))}"><figcaption>${escapeHtml(componentName)} — assembled</figcaption>${div(root, '', pieces)}</figure>`;
+}
+
+/** One `<div class="cn-lib-parts">` holding every part of a component: a single assembled example when the parts compose (Card-like naming), then any remaining styled parts as tiles and read-only ones as muted name+reason lines. */
+function partsBlock(componentName: string, parts: PartInfo[]): string {
+  const composed = composedMarkup(componentName, parts);
+  const composedNames = new Set(
+    composed ? /data-composed="([^"]*)"/.exec(composed)![1].split(' ') : [],
+  );
+  const items = parts
+    .filter((part) => !composedNames.has(part.name))
+    .map((part) => (part.classes !== undefined ? styledPartMarkup(part) : readOnlyPartMarkup(part)));
+  return `${composed ?? ''}<div class="cn-lib-parts">${items.join('\n')}</div>`;
 }
 
 /** The muted, escaped "Read-only: <reason>" line for a component whose own `cva()` exists but couldn't be read (see `ComponentInfo.readOnlyReason`). */
@@ -190,9 +238,9 @@ function componentBody(info: ComponentInfo, examples: RenderExample[]): string {
 
   if (info.cva) {
     const examplesHtml = `<div class="cn-lib-examples">${examples.map((example) => exampleMarkup(info, example)).join('\n')}</div>`;
-    return parts.length > 0 ? examplesHtml + partsBlock(parts) : examplesHtml;
+    return parts.length > 0 ? examplesHtml + partsBlock(info.exportName, parts) : examplesHtml;
   }
-  if (hasStyledPart) return partsBlock(parts);
+  if (hasStyledPart) return partsBlock(info.exportName, parts);
   if (info.readOnlyReason) return readOnlyReasonBody(info);
   return placeholderBody();
 }
@@ -323,15 +371,26 @@ body {
 }
 .cn-lib-part > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }
 /* The rendered sample keeps the part's REAL classes, but inside this tile it must behave:
-   no escaping its box (containment above), no absolute stacking over the caption, and long
-   single-word names must wrap instead of painting over the neighbor tile. */
+   no escaping its box (containment above), no absolute stacking over the caption. Long names
+   wrap at word boundaries only — never letter-by-letter (break-word, not anywhere). */
 .cn-lib-part > :not(figcaption):not(.cn-lib-part-note) {
   position: relative !important;
   inset: auto !important;
   transform: none !important;
   max-width: 100%;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
+.cn-lib-composed {
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 480px;
+  ${CARD_CONTAINMENT_CSS}
+}
+.cn-lib-composed > figcaption { font-size: 11px; color: ${CHROME_MUTED}; }
 .cn-lib-part-readonly, .cn-lib-part-note { margin: 0; font-size: 12px; color: ${CHROME_MUTED}; overflow-wrap: anywhere; }`;
 
 /**
