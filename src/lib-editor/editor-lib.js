@@ -234,26 +234,38 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
   // remains the instant fallback. Detection is a cheap probe of the conventional port; story ids
   // follow `canon storybook`'s generated naming (Canon/<Export> → canon-<slug>--variants).
   let storybookUrl = null;
+  let storybookIds = new Set();
   async function detectStorybook() {
     for (const url of ['http://localhost:6006']) {
       try {
         const res = await fetch(url + '/index.json', { mode: 'cors', signal: AbortSignal.timeout(1200) });
-        if (res.ok) { storybookUrl = url; return; }
+        if (!res.ok) continue;
+        const index = await res.json();
+        storybookUrl = url;
+        storybookIds = new Set(Object.keys(index.entries ?? {}));
+        return;
       } catch { /* not running — fall back to static preview */ }
     }
     storybookUrl = null;
+    storybookIds = new Set();
   }
   function storyUrlFor(view) {
     const base = `${storybookUrl}/iframe.html?globals=&viewMode=story`;
     if (view === 'theme' || !view) return `${base}&id=canon-button--variants`;
-    return `${base}&id=canon-${view}--variants`;
+    // Storybook ids derive from the story TITLE (Canon/<ExportName>), not the file slug —
+    // bubble.tsx exports BubbleGroup, so its id is canon-bubblegroup--variants. A component
+    // whose story doesn't exist in the live index (excluded, or Storybook stale) falls back
+    // to the static preview instead of Storybook's "couldn't find story" error page.
+    const exportName = specOf(view)?.exportName ?? view;
+    const id = `canon-${exportName.toLowerCase()}--variants`;
+    if (storybookIds.size && !storybookIds.has(id)) return null;
+    return `${base}&id=${id}`;
   }
   function loadFullPreview() {
-    if (storybookUrl) {
-      $('#le-preview-frame').src = storyUrlFor(activeView);
-      return;
-    }
-    // Fallback: the server's own static class-sample preview. Cache-busted defensively.
+    const storyUrl = storybookUrl ? storyUrlFor(activeView) : null;
+    if (storyUrl) { $('#le-preview-frame').src = storyUrl; return; }
+    // No Storybook, excluded slug, or story missing from the live index →
+    // the server's own static class-sample preview. Cache-busted defensively.
     $('#le-preview-frame').src = `/api/lib/preview?t=${Date.now()}`;
   }
   function showPreviewHtml(html) {
@@ -371,7 +383,7 @@ import { parseClassList, composeClassList, SCALES } from './classmap.js';
   // Clicking a component must SHOW that component: every preview section carries
   // data-slug (preview-lib.ts), so scroll the iframe to it and flash a highlight.
   function scrollPreviewTo(view) {
-    if (storybookUrl) { if (view !== 'theme') $('#le-preview-frame').src = storyUrlFor(view); return; }
+    if (storybookUrl) { if (view !== 'theme') loadFullPreview(); return; }
     if (view === 'theme') return;
     try {
       const doc = $('#le-preview-frame').contentDocument;
