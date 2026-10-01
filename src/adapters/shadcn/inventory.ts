@@ -92,9 +92,16 @@ function validateClassList(classes: string[], where: string): void {
  * preview renders it with its true, current styling), only its editability is withdrawn. A part
  * that was already read-only (`classes === undefined`) has nothing to check here and passes through
  * unchanged.
+ *
+ * An empty (or whitespace-only) `classes` string is treated as writable too, mirroring `writePart`'s
+ * own empty-case bypass (see its docstring): `SAFE_CLASS_LIST` is a per-token grammar that requires
+ * at least one non-space character, so without this it would flag a just-emptied part (every chip
+ * removed in the editor, then saved) as unwritable the moment it's read back — even though
+ * `writePart` accepts and re-splices `''` perfectly well. Same rule, same reason, at the other end
+ * of the read/write pair.
  */
 function withWriteGrammar(part: PartInfo): PartInfo {
-  if (part.classes === undefined || SAFE_CLASS_LIST.test(part.classes)) return part;
+  if (part.classes === undefined || part.classes.trim() === '' || SAFE_CLASS_LIST.test(part.classes)) return part;
   const { span, ...rest } = part;
   return { ...rest, readOnlyReason: 'contains characters the editor cannot write back (quotes)' };
 }
@@ -309,7 +316,26 @@ function spansOverlap(a: { start: number; end: number }, b: { start: number; end
  * splice in this same save may already have moved them.
  */
 export function writePart(component: ComponentInfo, partName: string, classes: string, stagedSource?: string): Write {
-  validateClassList([classes], `"${component.slug}" part "${partName}"`);
+  // An emptied part (every chip removed in the editor — editor-lib.js's onRemove joins whatever
+  // chips remain with ' ', so removing the last one yields '') is a legitimate, intentional save,
+  // not a hostile string: the cva editor already allows emptying a class list the same way
+  // (`validateClassList([])` on an empty `string[]` loops zero times and vacuously passes — there's
+  // nothing to check), and the design promises a part "the same chip editing" cva gets.
+  // `SAFE_CLASS_LIST`, though, is a per-TOKEN grammar (`[^...]+` requires at least one character on
+  // both the whole-string and single-token read of it), so it rejects the empty string outright — a
+  // false positive, not a real injection risk: an empty literal has no bytes to break out with.
+  //
+  // Bypass the grammar for this one case explicitly, rather than loosening `SAFE_CLASS_LIST` itself
+  // — every non-empty token still goes through the SAME unmodified grammar below, so the injection
+  // posture (no quotes, backtick, braces or backslash) is unchanged for any value that actually
+  // carries content. Tokenize first — split on whitespace and drop empty tokens, exactly how the
+  // editor derives its own chip list (`classes.split(/\s+/).filter(Boolean)`) — so a whitespace-only
+  // string (no tokens either way) validates as empty too, and normalize to the canonical `''` before
+  // splicing: a whitespace-only save round-trips to the same literal a fully-empty save would,
+  // rather than preserving incidental whitespace verbatim.
+  const isEmpty = classes.trim() === '';
+  const normalizedClasses = isEmpty ? '' : classes;
+  if (!isEmpty) validateClassList([classes], `"${component.slug}" part "${partName}"`);
 
   // never trust the caller's path to already be canonical on a fresh disk read (see connect.ts,
   // install.ts) — but `component.file` is canonical by construction either way (inventory() builds
@@ -326,10 +352,10 @@ export function writePart(component: ComponentInfo, partName: string, classes: s
     throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" span overlaps its cva() call — refusing to splice`);
   }
 
-  const content = splicePart(source, part, classes);
+  const content = splicePart(source, part, normalizedClasses);
 
   const roundTripped = parseParts(content).find((p) => p.name === partName);
-  if (!roundTripped || roundTripped.classes !== classes) {
+  if (!roundTripped || roundTripped.classes !== normalizedClasses) {
     throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" did not round-trip to the same classes`);
   }
 

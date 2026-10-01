@@ -57,10 +57,15 @@ function defaultsSummary(c: ComponentInfo): string {
   return defaults.join(', ') || '—';
 }
 
-// Same interpolation caveat as `variantSummary` above: a part's name and classes are only ever
-// reached here after the write path (`writePart` / `validateClassList`) already refused an unsafe
-// class string, and a part's `name` always comes from `parseParts`'s PascalCase export scan — never
-// user-supplied free text — so neither needs re-guarding for this table.
+// UNLIKE `variantSummary` above, this inlines a part's actual class CONTENT — not just axis/value
+// KEYS — and that content is not reliably constrained: `SAFE_CLASS_LIST` (inventory.ts) permits `|`
+// (it only excludes whitespace, quotes, backtick, braces and backslash), and a READ-ONLY part keeps
+// its `classes` from an unconstrained on-disk literal even though it never passed `writePart`'s
+// grammar at all (`withWriteGrammar` drops `span`, not `classes` — see inventory.ts). So a part's
+// classes reaching here CAN legitimately contain a `|` or an embedded newline, from either an
+// editable or a read-only part. What actually keeps this table well-formed is `row()`'s own
+// generic per-cell escaping below (backslash-escaping every `|`, collapsing every `\n` to a space) —
+// applied to this whole cell string like any other, not a guarantee specific to this function.
 function partsSummary(c: ComponentInfo): string {
   const styled = (c.parts ?? []).filter((part) => part.classes !== undefined);
   if (!styled.length) return '—';

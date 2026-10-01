@@ -468,6 +468,49 @@ test('writePart throws naming the part when it is read-only, writing nothing', (
   assert.equal(readFileSync(dialog.file, 'utf8'), before, 'a rejected writePart call must never touch the file');
 });
 
+test('writePart accepts an emptied class list ("" — every chip removed in the editor), splicing "" into the literal', (t) => {
+  // Final-review fix (Finding 1): removing every chip in the editor sets the draft to '', and the
+  // cva editor already allows emptying a class list the same way (validateClassList([]) on an
+  // empty array trivially passes) — so a part's classes must be allowed to go empty too, not 422
+  // as if '' were a hostile string.
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  const before = readFileSync(dialog.file, 'utf8');
+  const footerBefore = dialog.parts!.find((p) => p.name === 'DialogFooter')!;
+  assert.ok(footerBefore.span);
+
+  const write = writePart(dialog, 'DialogFooter', '');
+  installFiles(root, [write]);
+  const after = readFileSync(dialog.file, 'utf8');
+
+  // Byte-identical outside the spliced span; the literal becomes exactly `""` (quote style
+  // preserved), nothing deleted or substituted.
+  assert.equal(after.slice(0, footerBefore.span!.start), before.slice(0, footerBefore.span!.start), 'prefix byte-identical');
+  const beforeSuffix = before.slice(footerBefore.span!.end);
+  assert.equal(after.slice(after.length - beforeSuffix.length), beforeSuffix, 'suffix byte-identical');
+  assert.equal(after.slice(footerBefore.span!.start, footerBefore.span!.start + 2), '""', 'literal spliced to the empty string, quote style preserved');
+  assert.equal(after.length, before.length - (footerBefore.span!.end - footerBefore.span!.start) + 2);
+
+  // Fixed point: re-inventorying reads DialogFooter back as editable, classes === ''.
+  const reInventoried = inventory(root).find((i) => i.slug === 'dialog')!;
+  const footerAfter = reInventoried.parts!.find((p) => p.name === 'DialogFooter')!;
+  assert.equal(footerAfter.classes, '');
+  assert.ok(footerAfter.span, 'still editable — the part can be filled back in later');
+
+  // A sibling part in the same file is untouched.
+  const headerAfter = reInventoried.parts!.find((p) => p.name === 'DialogHeader')!;
+  assert.equal(headerAfter.classes, 'flex flex-col space-y-1.5 text-center sm:text-left');
+});
+
+test('writePart treats a whitespace-only class string the same as fully empty, normalizing the spliced literal to ""', (t) => {
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  const write = writePart(dialog, 'DialogFooter', '   ');
+  installFiles(root, [write]);
+  const reInventoried = inventory(root).find((i) => i.slug === 'dialog')!;
+  assert.equal(reInventoried.parts!.find((p) => p.name === 'DialogFooter')!.classes, '', 'whitespace-only input normalizes to the canonical empty string, not preserved verbatim');
+});
+
 test('writePart rejects an injection attempt in classes (quote breakout), writing nothing', (t) => {
   const root = clone(t);
   const dialog = inventory(root).find((i) => i.slug === 'dialog')!;

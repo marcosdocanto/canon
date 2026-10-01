@@ -555,6 +555,38 @@ test('POST /api/lib/save composes a cva edit and a part edit to the SAME file in
   assert.notEqual(body.hashes[toolbarFile], state.hashes[toolbarFile]);
 });
 
+test('POST /api/lib/save accepts an emptied part class string ("" — every chip removed), 200, file updated', async (t) => {
+  // Final-review fix (Finding 1): an emptied part is a legitimate save, not a 422 as if '' were an
+  // unsafe/hostile class string — see the matching writePart-level tests in shadcn-parts.test.ts.
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const before = readFileSync(dialogFile, 'utf8');
+  const footerBefore = state.components.find((c: any) => c.slug === 'dialog').parts.find((p: any) => p.name === 'DialogFooter');
+  assert.ok(footerBefore.classes.length > 0, 'DialogFooter starts non-empty');
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { dialog: { DialogFooter: '' } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 200);
+  const body = res.json();
+
+  const dialogAfter = body.components.find((c: any) => c.slug === 'dialog');
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogFooter').classes, '');
+  // Sibling part in the same file untouched.
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogHeader').classes, 'flex flex-col space-y-1.5 text-center sm:text-left');
+
+  const after = readFileSync(dialogFile, 'utf8');
+  assert.notEqual(after, before, 'the file was actually rewritten');
+  const spliceStart = before.indexOf(`"${footerBefore.classes}"`);
+  assert.ok(spliceStart >= 0);
+  assert.equal(after.slice(spliceStart, spliceStart + 2), '""', 'literal spliced to the empty string');
+  assert.equal(body.hashes[dialogFile], sha256(dialogFile));
+  assert.notEqual(body.hashes[dialogFile], state.hashes[dialogFile]);
+});
+
 test('POST /api/lib/save rejects an unsafe class string in a PART payload (quote breakout), 422, zero writes', async (t) => {
   const f = await libFixture(t);
   const state = (await f.request('/api/lib/state')).json();
