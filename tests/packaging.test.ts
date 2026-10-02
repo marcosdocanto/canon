@@ -43,8 +43,13 @@ test('the installed npm tarball runs the CLI and builds all runtime assets witho
     const mcp = JSON.parse(readFileSync(join(consumer, '.mcp.json'), 'utf8'));
     assert.ok(existsSync(mcp.mcpServers.canon.args[0]), 'installed integrations must reference the packaged CLI');
     const pkg = JSON.parse(readFileSync(join(consumer, 'node_modules', 'canon-ds', 'package.json'), 'utf8'));
-    assert.deepEqual(pkg.dependencies, { esbuild: '0.28.2' }, 'the real component compiler is the only runtime dependency');
+    assert.deepEqual(pkg.dependencies, { esbuild: '0.28.2', skills: '1.5.2' }, 'preview compiler and skill installer versions stay pinned');
     const runtime = join(consumer, 'node_modules', 'canon-ds');
+    const entryTarget = join(temp, 'new project');
+    mkdirSync(entryTarget);
+    run('setup', '--root', entryTarget, '--agent', 'codex', '--yes');
+    assert.equal(readFileSync(join(entryTarget, '.agents/skills/canon/SKILL.md'), 'utf8'), readFileSync(join(project, 'skills/canon/SKILL.md'), 'utf8'), 'the packed CLI must install its bundled skill before an app exists');
+    assert.ok(!existsSync(join(entryTarget, 'design')), 'entry setup must not initialize a design');
     for (const file of ['skills/canon/SKILL.md', 'skills/canon/agents/openai.yaml']) {
       assert.equal(readFileSync(join(runtime, file), 'utf8'), readFileSync(join(project, file), 'utf8'), `Packaged skill must match source: ${file}`);
     }

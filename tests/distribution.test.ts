@@ -125,7 +125,7 @@ test('Studio distributes its own installable Canon runtime from a local URL', as
     const metadata = JSON.parse(readFileSync(join(runtime, 'package.json'), 'utf8'));
     assert.equal(metadata.devDependencies, undefined);
     assert.equal(metadata.scripts, undefined, 'the archive must not carry lifecycle hooks');
-    assert.deepEqual(metadata.dependencies, { esbuild: '0.28.2' });
+    assert.deepEqual(metadata.dependencies, { esbuild: '0.28.2', skills: '1.5.2' });
     assert.deepEqual(readdirSync(runtime).sort(), ['LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'assets', 'bin', 'lib', 'package.json', 'skills']);
     assert.match(readFileSync(join(runtime, 'LICENSE'), 'utf8'), /MIT License/);
     assert.match(readFileSync(join(runtime, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /Lucide/);

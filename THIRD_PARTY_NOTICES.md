@@ -146,3 +146,10 @@ The Studio also includes shadcn/ui’s custom Radix state variants (`studio/shad
 ## Website agent logos
 
 OpenAI, Claude, Cursor, Kimi, Gemini and OpenCode SVG marks are sourced from Lobe Icons (https://github.com/lobehub/lobe-icons), MIT licensed. Copyright (c) LobeHub. These marks identify their respective products; trademark rights belong to their owners.
+
+## Agent skill installer
+
+`canon setup` invokes Skills 1.5.2 (MIT), distributed as a pinned npm dependency. This version supports Canon's Node.js 22.18 minimum. Skills and its dependencies retain their license notices in their installed packages.
+
+Source: https://github.com/vercel-labs/skills
+Package: https://www.npmjs.com/package/skills/v/1.5.2

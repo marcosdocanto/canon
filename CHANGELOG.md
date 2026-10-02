@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 — 2026-10-02
+
+- Added `npx canon-ds@latest setup`: install the bundled Canon entry skill with agent and scope selection, without a GitHub repository in the command.
+- Skill installation uses durable copies, supports explicit agents and project/global scope, and leaves application components and theme untouched. Run setup again to update the skill.
+- The homepage, guide and README now give existing shadcn/ui projects and new applications distinct, equally visible starting paths.
+
 ## 0.2.2 — 2026-10-02
 
 - Agent instructions and Studio autocomplete now derive color utility names from explicit Tailwind color mappings, preserving aliases and excluding font, spacing, radius and shadow variables. When mappings are unavailable, instructions point to the project configuration instead of inventing utilities.
