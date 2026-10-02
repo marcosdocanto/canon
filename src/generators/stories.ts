@@ -116,14 +116,13 @@ function storyContent(component: ComponentInfo, examples: RenderExample[], catal
   const renderBody = catalog ? catalog.jsx : (composed ? composed.jsx : elementsBlock(examples));
   return [
     GENERATED_MARK,
-    `import type { Meta, StoryObj } from '@storybook/react';`,
     ...imports,
     '',
-    `const meta = { title: 'Canon/${exportName}', component: ${exportName}${parameters} } satisfies Meta<typeof ${exportName}>;`,
+    // CSF is plain module data. Keep Storybook optional for the app's TypeScript build.
+    `const meta = { title: 'Canon/${exportName}', component: ${exportName}${parameters} };`,
     'export default meta;',
-    'type Story = StoryObj<typeof meta>;',
     '',
-    `export const Variants: Story = { render: () => (<div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>`,
+    `export const Variants = { render: () => (<div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>`,
     renderBody,
     `</div>) };`,
     '',

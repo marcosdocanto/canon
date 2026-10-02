@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 — 2026-10-02
+
+- Agent instructions and Studio autocomplete now derive color utility names from explicit Tailwind color mappings, preserving aliases and excluding font, spacing, radius and shadow variables. When mappings are unavailable, instructions point to the project configuration instead of inventing utilities.
+- Sidebar border and ring mappings now use the matching utility families.
+- Generated CSF stories no longer require Storybook types in application builds; the Sonner example preserves its supported theme union.
+- New library initialization points to Studio and explains that the application runs separately.
+
 ## 0.2.1 — 2026-10-02
 
 - Added the distributable `canon` entry skill: project setup, shadcn adoption, agent context, implementation, Studio, verification and local delivery.

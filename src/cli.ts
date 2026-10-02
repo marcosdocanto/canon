@@ -114,7 +114,7 @@ async function main() {
         await initLib({ root, lib, preset: flag('preset'), name, exec: defaultExec, hooks: !has('no-hooks'), force: has('force') });
         console.log(`✓ ${name} on ${lib} → ${root}`);
         console.log(`  design dir: design · stories: stories/canon`);
-        console.log(`\nNext: canon storybook to view the generated stories (or open the *.stories.tsx files directly); canon lint / canon check to verify, then commit.`);
+        console.log(`\nNext: canon studio to inspect and edit your library; canon lint / canon check to verify. Start your app separately to see shared changes in the product.`);
         return;
       }
       const { createSystem, writeDesignDir } = await import('./system.ts');

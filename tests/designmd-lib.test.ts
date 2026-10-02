@@ -5,7 +5,7 @@ import { readTheme } from '../src/adapters/shadcn/theme.ts';
 import { inventory } from '../src/adapters/shadcn/inventory.ts';
 import { getAdapter } from '../src/adapters/index.ts';
 import { designmdLib } from '../src/generators/designmd-lib.ts';
-import { agentsLibBlock } from '../src/generators/agents-lib.ts';
+import { agentsLibBlock, semanticClasses } from '../src/generators/agents-lib.ts';
 import { clone } from './fixtures/clone.ts';
 
 const describeVar = getAdapter('shadcn').describeVar;
@@ -78,11 +78,34 @@ test('agentsLibBlock is a canon-managed block naming semantic classes derived fr
   const theme = readTheme(root);
   const components = inventory(root);
 
-  const block = agentsLibBlock(system, theme, components);
+  const block = agentsLibBlock(system, { ...theme, utilityTheme: { 'color-primary': 'var(--primary)' } }, components);
 
   assert.match(block, /<!-- canon:start -->/);
   assert.match(block, /<!-- canon:end -->/);
-  // Derived from theme.vars.primary, not a hardcoded list.
+  // Derived from the project's Tailwind mapping, not an assumed variable convention.
   assert.match(block, /bg-primary/);
   assert.ok(block.includes(OWNERSHIP_RULE), 'agents block must include the ownership rule verbatim');
+});
+
+test('agent color utilities follow Tailwind aliases, excluding typography, dimensions and unmapped variables', () => {
+  const classes = semanticClasses({ file: 'theme.css', vars: {
+    primary: { light: 'oklch(0.6 0.2 280)' },
+    'font-sans': { light: 'system-ui' },
+    'font-heading': { light: 'var(--font-sans)' },
+    spacing: { light: '0.25rem' }, radius: { light: '0.5rem' },
+    shadow: { light: '0 1px 2px #0002' },
+    'private-color': { light: '#f00' },
+  }, utilityTheme: {
+    'color-action': 'var(--primary)', 'color-action-foreground': 'white',
+    'color-sidebar-border': 'var(--border)', 'color-sidebar-ring': 'var(--ring)',
+    'font-sans': 'system-ui', 'text-display': '3rem', 'radius-md': 'var(--radius)',
+    'spacing-page': '2rem', 'color-retired': 'initial',
+  } });
+  assert.deepEqual(classes, ['bg-action', 'text-action-foreground', 'border-sidebar-border', 'ring-sidebar-ring']);
+});
+
+test('CSS variables alone do not prove a Tailwind color utility exists', () => {
+  assert.deepEqual(semanticClasses({ file: 'theme.css', vars: {
+    primary: { light: '#333' }, 'font-sans': { light: 'system-ui' },
+  } }), []);
 });
