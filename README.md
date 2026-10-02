@@ -27,23 +27,35 @@ See [the generated-file map](https://marcosdocanto.github.io/canon/docs.html#fil
 
 ## Get started
 
-Install the **Canon skill** for your coding agent, even before your project exists:
+Install the **Canon skill** for your coding agent, for an existing project or a new one:
 
 ```sh
-npx skills add marcosdocanto/canon --skill canon
+npx canon-ds@latest setup
 ```
 
-Choose your agent in the installer, reload its session if needed, then ask:
+Choose your agent and project or global scope in the installer, then reload its session if needed. In Codex, you can invoke `$canon`.
+
+**Existing shadcn/ui project** — open the application's folder and ask:
+
+> Use the Canon skill to connect this shadcn/ui project. Preserve its components and theme. Do not rebuild the app.
+
+The agent inventories the installed library and connects its design context. Adoption preserves the existing theme; already connected projects reuse their Canon binding.
+
+**New project** — ask:
 
 > Use the Canon skill to build a local todo app in a new folder, with shadcn/ui.
 
-In Codex, you can invoke `$canon`. For an existing app, ask it to use that project and preserve its components and theme. For setup only, ask it to connect Canon without rebuilding the app.
+The agent creates the requested app in a separate folder, connects shadcn/ui and Canon, and builds with the installed components.
 
 The skill guides the agent through setup, library adoption, MCP context, implementation, visual editing, checks and local delivery. Your agent writes the application; Canon supplies its design context and shared style tools.
 
-The entry skill is separate from the generated project-specific `design-system` skill. Installing `canon-ds` alone does not install the entry skill into an agent. The npm package also includes it at `skills/canon`; after installing the package, use `npx skills add ./node_modules/canon-ds/skills/canon --skill canon` to install that exact packaged copy.
+`setup` installs the entry skill included in that Canon version, using the Skills installer to select agents and scope. It copies the files so removing npm's cache does not break the skill. It does not initialize or modify your app. Run it again to update the installed skill; updates are not automatic.
 
-This guide covers **Canon 0.2.2**. See the [migration guide](docs/MIGRATION-0.2.md) when updating an existing project. Manual setup is available below.
+For non-interactive installation, use `npx canon-ds@latest setup --agent codex --yes` (current directory) or add `--global` (all projects). `--root <directory>` targets an existing folder. `--yes` requires an explicit agent. Run `npx canon-ds@latest setup --help` for details.
+
+The entry skill is separate from the generated project-specific `design-system` skill. Installing `canon-ds` alone does not install the entry skill into an agent. If Canon is already installed locally, run `npx canon setup` to install the skill from that exact version.
+
+This guide covers **Canon 0.2.3**. See the [migration guide](docs/MIGRATION-0.2.md) when updating an existing project. Manual setup is available below.
 
 ## Library Studio
 

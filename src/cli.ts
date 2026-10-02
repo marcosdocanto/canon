@@ -41,6 +41,8 @@ const designDir = () => {
 const HELP = `canon ${VERSION} — the design harness for coding agents.
 
 Usage
+  canon setup [--agent <agents...>] [--global] [--root .] [--yes]
+                                           Install the included Canon entry skill for your coding agent
   canon connect <studio-url|snapshot.json> [--root .] [--design design] [--no-hooks]
                                            Import the saved design or reuse this project's existing Canon
   canon init <name> [--preset canon|editorial|vera|clean|dark] [--prefix cn] [--brand #hex] [--action #hex]
@@ -81,6 +83,11 @@ Examples
 
 async function main() {
   switch (cmd) {
+    case 'setup': {
+      const { setup } = await import('./setup.ts');
+      process.exitCode = setup(args.slice(1));
+      return;
+    }
     case 'connect': {
       const { connect } = await import('./connect.ts');
       const result = await connect(positional[0], { root: rootDir(), design: flag('design'), hooks: !has('no-hooks') });
