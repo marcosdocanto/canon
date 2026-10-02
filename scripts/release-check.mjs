@@ -17,11 +17,11 @@ try {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const [archive] = JSON.parse(result.stdout);
   const files = archive.files.map(file => file.path);
-  for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'assets/tailwind-play.js', 'bin/canon.js', 'lib/cli.mjs', 'lib/editor.js', 'lib/lib-editor/app.js', 'lib/lib-editor/app.css', 'lib/lib-editor/bundled-licenses.txt', 'lib/lib-editor/app.js.LEGAL.txt', 'lib/generators/documentation.html']) {
+  for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'assets/tailwind-play.js', 'bin/canon.js', 'lib/cli.mjs', 'lib/editor.js', 'lib/lib-editor/app.js', 'lib/lib-editor/app.css', 'lib/lib-editor/bundled-licenses.txt', 'lib/lib-editor/app.js.LEGAL.txt', 'lib/generators/documentation.html', 'skills/canon/SKILL.md', 'skills/canon/agents/openai.yaml']) {
     assert.ok(files.includes(name), `Missing published file: ${name}`);
   }
   for (const name of files) {
-    assert.ok(/^(?:bin\/|lib\/|assets\/|package\.json$|README\.md$|LICENSE$|THIRD_PARTY_NOTICES\.md$)/.test(name), `Unexpected published file: ${name}`);
+    assert.ok(/^(?:bin\/|lib\/|assets\/|skills\/|package\.json$|README\.md$|LICENSE$|THIRD_PARTY_NOTICES\.md$)/.test(name), `Unexpected published file: ${name}`);
   }
   const unpack = spawnSync('tar', ['-xzf', join(temporary, archive.filename), '-C', temporary], { encoding: 'utf8' });
   assert.equal(unpack.status, 0, unpack.stderr);

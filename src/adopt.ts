@@ -149,6 +149,12 @@ export async function adopt(opts: AdoptOptions): Promise<AdoptResult> {
     seeds: { overrides: adapter.themeOverrides(theme) },
   }));
 
+  // Adoption describes the installed design, not the preset used to seed internal tokens.
+  system.meta.direction = {
+    summary: `Preserve this project's installed ${adapter.id} components and theme in ${theme.file}.`,
+    principles: ['Reuse the installed components at their real import paths.', 'Read colors, typography and variants from the project source.'],
+    never: ['Do not replace the existing theme with a Canon preset.', 'Do not invent fonts or component variants that are absent from the source.'],
+  };
   const plan = buildPlan(root, designDir, system, components, opts.hooks);
   if (!opts.apply) return { plan, applied: false };
 

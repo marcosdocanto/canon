@@ -11,6 +11,20 @@ import { parseCssColor, distance } from './color.js';
 import { VERSION } from './version.ts';
 import { CATEGORY_LABEL } from './components/index.ts';
 import { sourceHash, type BuildManifest } from './build-manifest.ts';
+import { libraryMcp } from './mcp-library.ts';
+
+const libraryToolDescriptions: Record<string, string> = {
+  list_components: 'List installed library components with their actual import paths and variants. Categories are not inferred.',
+  get_component: 'Read the installed component specification and source, including real exports, props and styles. Use its inventory slug.',
+  get_css: 'Read the project theme (tokens/all) or installed component class definitions; no native CSS is generated.',
+  list_tokens: 'List only declared project theme variables, grouped by color, font, type, radius, space, shadow or other.',
+  get_token: 'Read a declared project token by its name or CSS variable (for example primary or --primary).',
+  suggest_token: 'Find an exact declared value or nearby declared color; never invent a token.',
+  list_patterns: 'Report the library adapter’s pattern inventory limitation. Use installed components for composition.',
+  get_pattern: 'Report the library adapter’s pattern inventory limitation; no native patterns apply.',
+  lint_code: 'Static raw-style and Tailwind checks using actual project tokens; not React prop or runtime validation.',
+  reload: 'Refresh the installed library inventory and project theme from source.',
+};
 
 type Json = Record<string, unknown>;
 type BuildRevision = { path: string; content: string | null };
@@ -32,7 +46,8 @@ function currentRevision(designDir: string): BuildRevision {
   return readRevision(designDir, typeof meta.out === 'string' ? meta.out : 'dist');
 }
 
-export async function startMcp(designDir: string) {
+export async function startMcp(designDir: string, root = process.cwd()) {
+  const library = libraryMcp(designDir, root);
   let system: System = loadDesignDir(designDir);
   let idx = indexTokens(system.tokens, system.meta.prefix);
   let known = knownFromSystem(system, idx);
@@ -104,6 +119,7 @@ export async function startMcp(designDir: string) {
   const tokenLine = (t: ResolvedToken) => `${t.ref}  ${t.cssVar} = ${t.light}${t.themed ? `  (dark ${t.dark})` : ''}${t.description ? `  — ${t.description}` : ''}`;
 
   const call = async (name: string, args: Json): Promise<Json> => {
+    if (library) return library.call(name, args);
     if (name !== 'reload') refreshIfBuilt();
     switch (name) {
       case 'design_rules': {
@@ -199,6 +215,8 @@ export async function startMcp(designDir: string) {
     { uri: 'canon://tokens.css', name: 'tokens.css', mimeType: 'text/css', description: 'All CSS custom properties' },
   ];
   const readResource = (uri: string) => {
+    if (!resources().some(resource => resource.uri === uri)) throw new Error(`Unknown resource ${uri}`);
+    if (library) return library.readResource(uri);
     refreshIfBuilt();
     const file = uri.replace('canon://', '');
     const path = join(distDir(), file);
@@ -220,7 +238,7 @@ export async function startMcp(designDir: string) {
     try {
       switch (method) {
         case 'initialize':
-          reply({ protocolVersion: (params.protocolVersion as string) ?? '2025-06-18', capabilities: { tools: { listChanged: false }, resources: { listChanged: false } }, serverInfo: { name: 'canon', version: VERSION }, instructions: `Design system "${system.meta.name}". Call design_rules first, then get_component / get_pattern for exact markup, suggest_token for any raw value, lint_code before finishing.` });
+          reply({ protocolVersion: (params.protocolVersion as string) ?? '2025-06-18', capabilities: { tools: { listChanged: false }, resources: { listChanged: false } }, serverInfo: { name: 'canon', version: VERSION }, instructions: library?.instructions ?? `Design system "${system.meta.name}". Call design_rules first, then get_component / get_pattern for exact markup, suggest_token for any raw value, lint_code before finishing.` });
           break;
         case 'notifications/initialized':
         case 'notifications/cancelled':
@@ -229,7 +247,7 @@ export async function startMcp(designDir: string) {
           reply({});
           break;
         case 'tools/list':
-          reply({ tools });
+          reply({ tools: library ? tools.map(tool => ({ ...tool, description: libraryToolDescriptions[tool.name] ?? tool.description })) : tools });
           break;
         case 'tools/call':
           reply(await call(String(params.name), (params.arguments ?? {}) as Json));
@@ -249,6 +267,6 @@ export async function startMcp(designDir: string) {
     }
   });
   rl.on('close', () => process.exit(0));
-  process.stderr.write(`canon mcp: ${system.meta.name} (${system.components.length} components, ${idx.size} tokens) on stdio\n`);
+  process.stderr.write(`canon mcp: ${system.meta.name} (${library ? 'live library source' : `${system.components.length} components, ${idx.size} tokens`}) on stdio\n`);
   await new Promise(() => {});
 }
