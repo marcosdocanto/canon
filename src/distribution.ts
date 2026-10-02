@@ -66,6 +66,7 @@ async function prepareArchive(): Promise<Buffer> {
     await copyRuntime(join(packageRoot, 'bin', 'canon.js'), join(staging, 'bin', 'canon.js'));
     await copyRuntime(runtime, join(staging, 'lib'));
     await copyRuntime(join(packageRoot, 'assets'), join(staging, 'assets'));
+    await copyRuntime(join(packageRoot, 'skills'), join(staging, 'skills'));
     await copyRuntime(join(packageRoot, 'README.md'), join(staging, 'README.md'));
     for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
       await copyRuntime(join(packageRoot, name), join(staging, name));
@@ -78,7 +79,7 @@ async function prepareArchive(): Promise<Buffer> {
     // An explicit staging tree excludes the served design, caller's project, dev
     // dependencies, lifecycle hooks, npm configuration and checkout-only files.
     metadata.bin = { canon: 'bin/canon.js' };
-    metadata.files = ['bin', 'lib', 'assets', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'];
+    metadata.files = ['bin', 'lib', 'assets', 'skills', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'];
     await writeFile(join(staging, 'package.json'), JSON.stringify(metadata, null, 2) + '\n');
     const userConfig = join(temporary, 'user.npmrc');
     const globalConfig = join(temporary, 'global.npmrc');

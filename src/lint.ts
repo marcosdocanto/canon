@@ -260,7 +260,7 @@ function withoutFunctions(src: string, names: string[]): string {
 }
 
 /** Lint syntax that carries styles or classes, retaining source offsets. */
-export function lintSource(known: Known, file: string, content: string, opts: { tailwind: boolean } = { tailwind: true }): Violation[] {
+export function lintSource(known: Known, file: string, content: string, opts: { tailwind: boolean; native?: boolean } = { tailwind: true }): Violation[] {
   const ext = extname(file) || '.css';
   const src = stripComments(content, ext);
   const rawLines = content.split('\n');
@@ -297,10 +297,10 @@ export function lintSource(known: Known, file: string, content: string, opts: { 
       }
     }
     if (prop === 'font-family' && !/var\(|\binherit\b/.test(val) && (!js || /^['"\x60]/.test(val))) {
-      push(offset, 'raw-font', 'error', 'Raw ' + name + ' ' + val.slice(0, 60), 'use var(--' + p + '-font-family-sans|mono|display)');
+      push(offset, 'raw-font', 'error', 'Raw ' + name + ' ' + val.slice(0, 60), opts.native === false ? 'use a font variable declared by the project theme' : 'use var(--' + p + '-font-family-sans|mono|display)');
     }
     if (prop === 'box-shadow' && !/var\(|\b(?:none|inherit)\b/.test(val) && (!js || /^['"\x60]/.test(val))) {
-      push(offset, 'raw-shadow', 'error', 'Raw ' + name, 'use var(--' + p + '-shadow-xs|sm|md|lg|xl|focus)');
+      push(offset, 'raw-shadow', 'error', 'Raw ' + name, opts.native === false ? 'use a shared shadow from the project theme or installed component' : 'use var(--' + p + '-shadow-xs|sm|md|lg|xl|focus)');
     }
     const stylingProperty = colorProps.test(prop) || sizeProps.test(prop) || prop === 'font-family' || prop === 'box-shadow';
     const important = !js || stylingProperty ? safe.indexOf('!important') : -1;
@@ -327,6 +327,7 @@ export function lintSource(known: Known, file: string, content: string, opts: { 
         if (!/#|rgb|hsl|px|rem|em/.test(m[0])) push(span.start + m.index!, 'tailwind-arbitrary', 'error', 'Arbitrary value ' + m[0], 'use a scale utility');
       }
     }
+    if (opts.native === false) return roots;
     const classRe = new RegExp('(?<![\\w-])' + p + '-[a-z0-9]+(?:-[a-z0-9]+)*(?:__[a-z0-9]+(?:-[a-z0-9]+)*)?', 'g');
     for (const m of span.text.matchAll(classRe)) {
       const cls = m[0];

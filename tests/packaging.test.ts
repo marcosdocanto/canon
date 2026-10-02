@@ -45,6 +45,9 @@ test('the installed npm tarball runs the CLI and builds all runtime assets witho
     const pkg = JSON.parse(readFileSync(join(consumer, 'node_modules', 'canon-ds', 'package.json'), 'utf8'));
     assert.deepEqual(pkg.dependencies, { esbuild: '0.28.2' }, 'the real component compiler is the only runtime dependency');
     const runtime = join(consumer, 'node_modules', 'canon-ds');
+    for (const file of ['skills/canon/SKILL.md', 'skills/canon/agents/openai.yaml']) {
+      assert.equal(readFileSync(join(runtime, file), 'utf8'), readFileSync(join(project, file), 'utf8'), `Packaged skill must match source: ${file}`);
+    }
     assert.match(readFileSync(join(runtime, 'LICENSE'), 'utf8'), /MIT License/);
     assert.match(readFileSync(join(runtime, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /Lucide/);
     assert.equal(pkg.publishConfig.access, 'public');

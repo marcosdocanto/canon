@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSystem } from '../src/build.ts';
 import { createSystem, loadDesignDir, writeDesignDir } from '../src/system.ts';
+import { clone } from './fixtures/clone.ts';
+import { adopt } from '../src/adopt.ts';
 
 type Json = Record<string, any>;
 
@@ -91,6 +93,42 @@ function rpcClient(child: ChildProcessWithoutNullStreams) {
 function textOf(response: Json): string {
   return response.content[0].text as string;
 }
+
+test('library MCP reads the bound app inventory and current theme instead of the native catalog', { timeout: 30_000 }, async (t) => {
+  const root = clone(t);
+  const design = join(root, 'design-context');
+  await adopt({ root, design, apply: true, hooks: false });
+  const child = spawn(process.execPath, [cli, 'mcp', '--root', root, '--design', design], { cwd: tmpdir(), stdio: ['pipe', 'pipe', 'pipe'] });
+  const client = rpcClient(child);
+  t.after(async () => {
+    client.close();
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit'); child.kill(); await exited;
+    }
+  });
+  const call = async (name: string, args: Json = {}) => textOf(await client.request('tools/call', { name, arguments: args }));
+  await client.request('initialize', {});
+  assert.match(await call('list_components'), /~\/ui\/button/);
+  const button = await call('get_component', { slug: 'button' });
+  assert.match(button, /ButtonProps/);
+  assert.match(button, /bg-primary/);
+  assert.match(await call('design_rules'), /library mode/);
+  assert.doesNotMatch(await call('design_rules'), /DM Sans|IBM Plex|orchid|Vera/);
+  assert.match(await call('get_token', { name: '--primary' }), /oklch\(0\.205 0 0\)/);
+  assert.doesNotMatch(await call('list_tokens'), /--cn-|space\.4/);
+  assert.match(await call('list_patterns'), /not inventoried/i);
+  const cssPath = join(root, 'app/globals.css');
+  writeFileSync(cssPath, readFileSync(cssPath, 'utf8').replace('oklch(0.205 0 0)', '#123456'));
+  rmSync(join(root, 'src/ui/button.tsx'));
+  assert.match(await call('get_token', { name: 'primary' }), /#123456/);
+  assert.doesNotMatch(await call('list_components'), /~\/ui\/button/);
+  assert.match(await call('suggest_token', { value: '#123456' }), /var\(--primary\)/);
+  assert.doesNotMatch(await call('lint_code', { code: '.x { color: #123456; }', filename: 'x.css' }), /--cn-/);
+  const resource = await client.request('resources/read', { uri: 'canon://DESIGN.md' });
+  assert.match(resource.contents[0].text, /#123456/);
+  assert.doesNotMatch(resource.contents[0].text, /~\/ui\/button/);
+  await assert.rejects(client.request('resources/read', { uri: 'canon://../../package.json' }), /Unknown resource/);
+});
 
 test('a running MCP reloads token, component, and design-rule data after another process builds', async (t) => {
   const f = await fixture(t, 'generated/canon');

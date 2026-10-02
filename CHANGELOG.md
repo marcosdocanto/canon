@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-10-02
+
+- Added the distributable `canon` entry skill: project setup, shadcn adoption, agent context, implementation, Studio, verification and local delivery.
+- Included the skill in npm and downloadable archives; updated the homepage and documentation with skill-first onboarding and a manual setup path.
+- Fixed library MCP to return actual installed components, imports, source and declared theme values, refreshing on every request instead of reading the native catalog.
+- Library MCP lint suggestions now use project tokens; library pattern limitations are explicit and resource reads are restricted to advertised resources.
+- Adoption now describes the existing project design without inheriting Canon preset fonts or art-direction claims.
+
 ## 0.2.0 — 2026-10-02
 
 Canon is a design harness for coding agents. Version 0.2 connects an installed component library to managed AGENTS.md instructions, design references, MCP tools, Library Studio and design checks, with shadcn/ui as the current adapter.

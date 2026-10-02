@@ -2,6 +2,12 @@
 
 Version 0.2 connects installed component libraries to the full Canon design harness: generated agent instructions, design references, MCP, Library Studio and supported checks. The package remains `canon-ds`, the executable remains `canon`, and native projects keep their existing design source.
 
+## Updating from 0.2.0
+
+Update `canon-ds` to 0.2.1 or newer with your package manager, run `npx canon sync`, then restart the agent’s Canon MCP process and Studio. Library MCP now reads the real installed component inventory and theme on each request. Do not initialize or adopt again to upgrade.
+
+The optional entry skill is available with `npx skills add marcosdocanto/canon --skill canon`. It orchestrates setup through local delivery; the generated `design-system` skill remains the project-specific contract. Existing bindings, components and theme values are preserved.
+
 ## Existing shadcn/ui application
 
 Preserve your source in version control. Install the desired Canon release, then run `npx canon adopt` from the application root to review the plan. Run `npx canon adopt --apply` only when the plan targets the intended components and theme. Open `npx canon studio --port 0 --open`.

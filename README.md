@@ -18,7 +18,7 @@ The Library Studio interface is built with React and shadcn/ui controls. Its Jav
 
 1. **Connect the library.** Adopt an existing shadcn/ui project without reseeding its theme, or initialize a library in a new framework app.
 2. **Install context.** Canon creates or updates its managed block in `AGENTS.md` and `CLAUDE.md`, preserving unrelated instructions. It generates `DESIGN.compact.md`, `DESIGN.md`, a Claude skill and Cursor rule, and configures Canon MCP for supported clients.
-3. **Build with the agent.** Start from the compact reference and use MCP to retrieve relevant rules and component details. Reuse installed components and theme tokens.
+3. **Build with the agent.** Start from the compact reference and use MCP to retrieve relevant rules and component details. In library mode, MCP reads the actual installed inventory and declared theme on each request. Reuse installed components and theme tokens.
 4. **Refine in Studio.** Inspect real components and preview supported style changes before saving.
 5. **Save and sync.** Save updates shared source and generated references. The app reloads through its framework. Use `canon sync` after external design edits.
 6. **Check the result.** Run Canon’s checks, review the actual UI, and run the application’s own tests. Optional Claude edit hooks provide lint feedback; they are not enforcement or a guarantee of correctness.
@@ -27,7 +27,23 @@ See [the generated-file map](https://marcosdocanto.github.io/canon/docs.html#fil
 
 ## Get started
 
-This guide covers **Canon 0.2**. See the [migration guide](docs/MIGRATION-0.2.md) when updating an existing project.
+Install the **Canon skill** for your coding agent, even before your project exists:
+
+```sh
+npx skills add marcosdocanto/canon --skill canon
+```
+
+Choose your agent in the installer, reload its session if needed, then ask:
+
+> Use the Canon skill to build a local todo app in a new folder, with shadcn/ui.
+
+In Codex, you can invoke `$canon`. For an existing app, ask it to use that project and preserve its components and theme. For setup only, ask it to connect Canon without rebuilding the app.
+
+The skill guides the agent through setup, library adoption, MCP context, implementation, visual editing, checks and local delivery. Your agent writes the application; Canon supplies its design context and shared style tools.
+
+The entry skill is separate from the generated project-specific `design-system` skill. Installing `canon-ds` alone does not install the entry skill into an agent. The npm package also includes it at `skills/canon`; after installing the package, use `npx skills add ./node_modules/canon-ds/skills/canon --skill canon` to install that exact packaged copy.
+
+This guide covers **Canon 0.2.1**. See the [migration guide](docs/MIGRATION-0.2.md) when updating an existing project. Manual setup is available below.
 
 ## Library Studio
 
@@ -39,6 +55,8 @@ npx canon adopt                  # review the adoption plan
 npx canon adopt --apply          # preserve the installed components and theme
 npx canon studio --port 0 --open
 ```
+
+`--save-dev` (or `-D`) keeps Canon in development dependencies; your deployed app uses its own component source and theme.
 
 For a new library in a framework application, use `npx canon init "My product" --lib shadcn` instead of adoption. Initialization installs a core selection when needed and applies a Canon preset; adoption preserves your existing theme. Add one component at a time with `npx canon add <slug>`.
 

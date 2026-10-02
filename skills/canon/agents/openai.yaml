@@ -1,0 +1,4 @@
+interface:
+  display_name: "Canon"
+  short_description: "Build with Canon, from setup to a working product"
+  default_prompt: "Use $canon to build my product with shadcn/ui, connect the design harness, and verify the working application."

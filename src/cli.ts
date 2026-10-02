@@ -249,7 +249,7 @@ async function main() {
     }
     case 'mcp': {
       const { startMcp } = await import('./mcp.ts');
-      await startMcp(designDir());
+      await startMcp(designDir(), rootDir());
       return;
     }
     case 'add': {
