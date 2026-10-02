@@ -6,7 +6,7 @@ import type { Write } from '../../design-files.ts';
 import type { ComponentInfo, CvaSpec, PartInfo } from '../types.ts';
 import { readConfig } from './config.ts';
 import { CvaParseError, findCva, parseCva, spliceCva } from './cva.ts';
-import { parseParts, splicePart } from './parts.ts';
+import { cvaOwner, parseParts, splicePart } from './parts.ts';
 
 const LIST_EXPORT = /export\s*\{([^}]*)\}/g;
 const DECL_EXPORT = /export\s+(?:function\*?|class|const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
@@ -46,57 +46,29 @@ function unsafeVariantKey(spec: CvaSpec): string | undefined {
   return undefined;
 }
 
-// A class-list entry `writeVariants` is about to splice into `cva()`'s printed string literals
-// (`printClassValue` in cva.ts) must be plain space-separated tokens: no quotes, backtick, braces
-// or backslash. `printClassValue` always round-trips a value through `JSON.stringify`, which
-// escapes `"`/`\` correctly on its own, so this guard isn't about producing invalid TSX — it's
-// about refusing a hostile or malformed value (e.g. one holding a `}` meant to close the object
-// literal, or a backtick aimed at a template-literal context elsewhere) before it ever reaches
-// disk. The round-trip check at the end of `writeVariants` is the final backstop if this regex
-// were ever wrong about what's actually safe.
-//
-// `writePart` reuses this SAME grammar (via `validateClassList`) for a part's whole `classes`
-// string: a part's literal is spliced back by `splicePart` the same way a cva class string is by
-// `spliceCva` — wrapped in quotes, no escaping applied — so it needs the identical guarantee.
-//
-// `inventory()` ALSO applies this same grammar at READ time (`withWriteGrammar`, below) — not just
-// `writeVariants`/`writePart` at write time. Read/write grammar asymmetry (review finding):
-// `parseParts` happily marks a literal containing a single quote inside a double-quoted string as
-// editable — legit Tailwind (`after:content-['']`, `bg-[url('x')]`) that `parseParts` is right to
-// treat as a real static literal — but `SAFE_CLASS_LIST` forbids ANY quote character, so `writePart`
-// 422s on it even for an UNCHANGED resend. Without the read-time check below, a component would be
-// shown editable for a part that can never actually be saved.
+// New class tokens use a restricted grammar. Opaque selectors may only be retained from
+// the same scope in freshly parsed source; client metadata never authorizes unsafe tokens.
+// CVA prints escaped strings; part writes preserve their original delimiter and verify the
+// parsed literal after splicing. Existing opposite-delimiter quotes are therefore safe to keep.
 const SAFE_CLASS_LIST = /^[^\s"'`{}\\]+(?: [^\s"'`{}\\]+)*$/;
 
-function validateClassList(classes: string[], where: string): void {
+function validateClassList(classes: string[], where: string, original: string[] = []): void {
+  // CVA strings are JSON-escaped when printed. Existing opaque selector tokens may survive a
+  // neighboring safe edit, but must come from the same scope in freshly parsed source, not the
+  // client's inventory. Parts additionally require a safely parsed, delimiter-preserving literal.
+  const preserved = new Set(original.flatMap((value) => value.split(' ')).filter((token) => token && !SAFE_CLASS_LIST.test(token)));
   for (const cls of classes) {
-    if (!SAFE_CLASS_LIST.test(cls)) throw new Error(`shadcn adapter: ${where} has an unsafe class string: ${JSON.stringify(cls)}`);
+    if (cls !== "" && !SAFE_CLASS_LIST.test(cls) && !cls.split(' ').every((token) => SAFE_CLASS_LIST.test(token) || preserved.has(token))) throw new Error(`shadcn adapter: ${where} has an unsafe class string: ${JSON.stringify(cls)}`);
   }
 }
 
-/**
- * Downgrade a part whose CURRENT literal `parseParts` resolved as editable (`classes`/`span` both
- * set) but whose text doesn't fit `SAFE_CLASS_LIST` — the exact grammar `writePart` enforces before
- * ever splicing a part's `classes` back to disk (via `validateClassList`). A literal like
- * `after:content-['']` or `bg-[url('x')]` is legitimate Tailwind and a perfectly real static
- * literal, so `parseParts` is right to resolve it — but splicing ANY value back into it (even the
- * SAME value, unchanged) would 422, since `SAFE_CLASS_LIST` forbids every quote character. Refusing
- * only at write time left a part "shown editable" that could never actually be saved — and because
- * the editor used to send a whole slug's dirty parts together, one such part blocked every sibling
- * edit on the same file (see the `SAFE_CLASS_LIST` comment above).
- *
- * `span` is dropped — the one field `writePart`/`handleSave` (serve-lib.ts) actually gate
- * editability on — so this part is refused the same honest way any other read-only part is,
- * without a round-trip to `writePart` ever being attempted. `classes` (and `dynamicTail`/`note`, if
- * present) are kept AS-IS: the literal is still real and still worth displaying (e.g. the library
- * preview renders it with its true, current styling), only its editability is withdrawn. A part
- * that was already read-only (`classes === undefined`) has nothing to check here and passes through
- * unchanged.
- */
+/** Parsed literals may preserve their existing quotes; other unsupported punctuation and
+ * whitespace remain read-only. parseParts already refuses escapes/interpolation, and the
+ * writer accepts opaque tokens only from this freshly parsed literal. */
 function withWriteGrammar(part: PartInfo): PartInfo {
-  if (part.classes === undefined || SAFE_CLASS_LIST.test(part.classes)) return part;
+  if (part.classes === undefined || part.classes.trim() === '' || /^[^\s`{}\\]+(?: [^\s`{}\\]+)*$/.test(part.classes)) return part;
   const { span, ...rest } = part;
-  return { ...rest, readOnlyReason: 'contains characters the editor cannot write back (quotes)' };
+  return { ...rest, readOnlyReason: 'contains characters the editor cannot write back' };
 }
 
 /**
@@ -110,12 +82,12 @@ function withWriteGrammar(part: PartInfo): PartInfo {
  * `defaultVariants`' own keys and string values are held to the same two grammars defensively, even
  * though nothing renders them unescaped today (see `unsafeVariantKey`'s docstring on that scope).
  */
-function validateSpec(spec: CvaSpec, slug: string): void {
-  validateClassList(spec.base, `"${slug}" base`);
+function validateSpec(spec: CvaSpec, slug: string, original: CvaSpec): void {
+  validateClassList(spec.base, `"${slug}" base`, original.base);
   for (const [axis, options] of Object.entries(spec.variants)) {
-    for (const [value, classes] of Object.entries(options)) validateClassList(classes, `"${slug}" variants.${axis}.${value}`);
+    for (const [value, classes] of Object.entries(options)) validateClassList(classes, `"${slug}" variants.${axis}.${value}`, original.variants[axis]?.[value]);
   }
-  spec.compoundVariants.forEach(({ classes }, index) => validateClassList(classes, `"${slug}" compoundVariants[${index}]`));
+  spec.compoundVariants.forEach(({ classes }, index) => validateClassList(classes, `"${slug}" compoundVariants[${index}]`, original.compoundVariants[index]?.classes));
 
   const unsafeKey = unsafeVariantKey(spec);
   if (unsafeKey !== undefined) throw new Error(`shadcn adapter: "${slug}" has an unsafe variant key: ${JSON.stringify(unsafeKey)}`);
@@ -202,6 +174,7 @@ export function inventory(root: string): ComponentInfo[] {
     const span = findCva(source);
     if (span) {
       info.cvaSpan = span;
+      info.cvaOwner = cvaOwner(source, span);
       try {
         const spec = parseCva(source, span);
         const unsafeKey = unsafeVariantKey(spec);
@@ -242,8 +215,6 @@ export function inventory(root: string): ComponentInfo[] {
  * (disk or staged) via a fresh `findCva`, never trusted from a prior parse.
  */
 export function writeVariants(component: ComponentInfo, spec: CvaSpec, stagedSource?: string): Write {
-  validateSpec(spec, component.slug);
-
   // never trust the caller's path to already be canonical on a fresh disk read (see connect.ts,
   // install.ts) — but `component.file` is canonical by construction either way (inventory() builds
   // it under an already-realpath'd root), so re-resolving it again when staging is unnecessary.
@@ -251,12 +222,14 @@ export function writeVariants(component: ComponentInfo, spec: CvaSpec, stagedSou
   const source = stagedSource ?? readFileSync(file, 'utf8');
   const span = findCva(source); // first cva() call only, same as inventory()
   if (!span) throw new Error(`shadcn adapter: "${component.slug}" no longer has a cva() call (${file})`);
+  let original: CvaSpec;
   try {
-    parseCva(source, span);
+    original = parseCva(source, span);
   } catch (error) {
     if (!(error instanceof CvaParseError)) throw error;
     throw new Error(`shadcn adapter: "${component.slug}"'s cva() is no longer parseable: ${error.message}`);
   }
+  validateSpec(spec, component.slug, original);
   const content = spliceCva(source, span, spec);
 
   const roundTripSpan = findCva(content);
@@ -278,58 +251,35 @@ function spansOverlap(a: { start: number; end: number }, b: { start: number; end
   return a.start < b.end && b.start < a.end;
 }
 
-/**
- * Splice an edited class string into one exported subcomponent's ("part's") className literal —
- * see shadcn/parts.ts. Validates `classes` first with the SAME safe space-separated class-token
- * grammar `writeVariants` enforces on every `cva()` class string (`validateClassList` /
- * `SAFE_CLASS_LIST` — no quotes, backtick, braces or backslash) and refuses, naming the offending
- * value, before touching the file at all. Re-reads the file and re-parses its parts fresh —
- * `parseParts` is re-run rather than trusting `component.parts` from a possibly-stale `inventory()`
- * call, since a part's span may have moved since then — through the SAME `withWriteGrammar` step
- * `inventory()` applies, so a part whose CURRENT literal doesn't fit `SAFE_CLASS_LIST` (e.g. a
- * quote inside `after:content-['']`) is refused as read-only here too, independently of whatever
- * `component.parts` says and regardless of how safe the NEW `classes` value being attempted is —
- * and refuses, naming the component and part, when `partName` doesn't exist on this file or is
- * read-only (no literal to splice; see `PartInfo.readOnlyReason`). As a defensive backstop for the
- * disjointness a part's span and the
- * file's own `cva()` span are assumed to have (see the NOTE in shadcn/parts.ts's `parseParts`
- * docstring), also refuses — without touching the file — if the located part's span were ever
- * found to overlap the file's `cva()` span. Finally, before returning the `Write`, re-parses the
- * JUST-SPLICED source and checks the named part's literal now reads back as EXACTLY `classes` — a
- * `splicePart` → `parseParts` fixed point, mirroring `writeVariants`'s own round-trip check —
- * refusing rather than silently writing a file whose part reads back differently than intended.
- *
- * `stagedSource`, when given, is parsed/spliced INSTEAD OF re-reading `component.file` from disk —
- * see the `Adapter.writeVariants` docstring (types.ts) for why (same-file cva+parts composition,
- * and multiple parts in one file: a caller feeds each successive `writePart` call the PRIOR call's
- * returned `Write.content`). The realpath resolution and disk read are BOTH skipped in that case,
- * same reasoning as `writeVariants` — `component.file` is canonical by construction, staged or not.
- * Every span below — the part's own and the file's `cva()` span used for the overlap backstop — is
- * re-located inside whatever source is in play, never trusted from a precomputed value: a prior
- * splice in this same save may already have moved them.
- */
+/** Splice a part using freshly parsed source (or the prior staged write). Preserve only
+ * existing opaque tokens from that same literal; reject newly introduced unsafe tokens.
+ * The overlap guard and parse/splice fixed point protect the original quote delimiter. */
 export function writePart(component: ComponentInfo, partName: string, classes: string, stagedSource?: string): Write {
-  validateClassList([classes], `"${component.slug}" part "${partName}"`);
+  // Emptying a part is valid; normalize whitespace-only input to the empty literal.
+  const isEmpty = classes.trim() === '';
+  const normalizedClasses = isEmpty ? '' : classes;
 
   // never trust the caller's path to already be canonical on a fresh disk read (see connect.ts,
   // install.ts) — but `component.file` is canonical by construction either way (inventory() builds
   // it under an already-realpath'd root), so re-resolving it again when staging is unnecessary.
   const file = stagedSource === undefined ? realpathSync(component.file) : component.file;
   const source = stagedSource ?? readFileSync(file, 'utf8');
-  const parts = parseParts(source).map(withWriteGrammar); // re-parsed fresh, same as inventory() would today — including the SAME write-grammar downgrade, so a part whose CURRENT literal isn't writable is refused here too, independently of `component.parts` and regardless of what new `classes` value is being attempted.
+  const parts = parseParts(source).map(withWriteGrammar);
   const part = parts.find((p) => p.name === partName);
   if (!part) throw new Error(`shadcn adapter: "${component.slug}" has no part named "${partName}"`);
   if (!part.span) throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" is read-only${part.readOnlyReason ? ` (${part.readOnlyReason})` : ''}`);
+
+  if (!isEmpty) validateClassList([classes], `"${component.slug}" part "${partName}"`, [part.classes!]);
 
   const cvaSpan = findCva(source);
   if (cvaSpan && spansOverlap(part.span, cvaSpan)) {
     throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" span overlaps its cva() call — refusing to splice`);
   }
 
-  const content = splicePart(source, part, classes);
+  const content = splicePart(source, part, normalizedClasses);
 
   const roundTripped = parseParts(content).find((p) => p.name === partName);
-  if (!roundTripped || roundTripped.classes !== classes) {
+  if (!roundTripped || roundTripped.classes !== normalizedClasses) {
     throw new Error(`shadcn adapter: "${component.slug}"'s part "${partName}" did not round-trip to the same classes`);
   }
 

@@ -8,9 +8,9 @@ import { spawn } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { adopt } from '../src/adopt.ts';
 import { createSystem, writeDesignDir } from '../src/system.ts';
@@ -133,16 +133,8 @@ function ToolbarSeparator({ className, ...props }: React.HTMLAttributes<HTMLDivE
 export { Toolbar, toolbarVariants, ToolbarSeparator }
 `;
 
-/**
- * A single component file with no `cva()` at all and TWO exported parts: `QuoteLiteral` carries a
- * legit-Tailwind literal with an embedded single quote (`after:content-['']`, arbitrary-value
- * syntax) — real static JSX per shadcn/parts.ts, but unsafe to splice back per inventory.ts's
- * `SAFE_CLASS_LIST`, so `withWriteGrammar` must downgrade it to read-only at inventory time (the
- * read/write grammar asymmetry finding). `QuoteSibling` is a perfectly ordinary editable sibling IN
- * THE SAME FILE, used below to confirm that one unwritable part never blocks the other, in the same
- * request shape `editor-lib.js`'s `save()` now sends (only the changed part, never the whole
- * per-slug draft map).
- */
+/** Two editable parts share a file. QuoteLiteral has a valid opaque Tailwind selector;
+ * its original token must survive a neighboring edit and a same-file sibling save. */
 const QUOTE_PART_TSX = `import * as React from "react"
 
 import { cn } from "~/lib/utils"
@@ -216,6 +208,19 @@ function mockRes(): { res: ServerResponse; done: Promise<{ status: number; text:
   } as unknown as ServerResponse;
   return { res, done };
 }
+
+test('library reset requires an explicit confirmation and a reviewed plan; GET cannot mutate it', async t => {
+  const f = await libFixture(t);
+  const before = sha256(join(f.root, 'app/globals.css'));
+  for (const body of [{ id: 'invented' }, { id: 'invented', confirm: true }]) {
+    const response = await f.request('/api/lib/reset', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal(response.status, 400);
+  }
+  assert.equal((await f.request('/api/lib/reset')).status, 405);
+  const stale = await f.request('/api/lib/reset', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'invented', confirm: 'RESET_LIBRARY' }) });
+  assert.equal(stale.status, 409);
+  assert.equal(sha256(join(f.root, 'app/globals.css')), before);
+});
 
 test('GET /api/lib/state returns the theme, component inventory (button cva, badge read-only) and file hashes', async (t) => {
   const f = await libFixture(t);
@@ -316,8 +321,11 @@ test('POST /api/lib/preview builds a draft-theme preview without writing to disk
   assert.equal(res.status, 200);
   assert.match(String(res.headers['content-type']), /text\/html/);
   assert.match(res.text, /--primary:\s*#123456;/);
-  const darkBlock = /\.dark\s*\{([^}]*)\}/.exec(res.text)?.[1] ?? '';
-  assert.match(darkBlock, /--primary:\s*#abcdef;/);
+  // The project CSS and the draft override may each contain a .dark rule.
+  // Check the final declaration, which wins the cascade, rather than the first rule.
+  const darkValues = [...res.text.matchAll(/\.dark\s*\{([^}]*)\}/g)]
+    .flatMap((block) => [...block[1].matchAll(/--primary:\s*([^;]+);/g)].map((match) => match[1].trim()));
+  assert.equal(darkValues.at(-1), '#abcdef');
 
   assert.equal(readFileSync(join(f.root, 'app', 'globals.css'), 'utf8'), before, 'draft preview must not touch the theme file');
   assert.equal(readFileSync(join(f.root, 'src', 'ui', 'button.tsx'), 'utf8'), readFileSync(new URL('./fixtures/shadcn-app/src/ui/button.tsx', import.meta.url), 'utf8'), 'draft preview must not touch component files');
@@ -555,6 +563,38 @@ test('POST /api/lib/save composes a cva edit and a part edit to the SAME file in
   assert.notEqual(body.hashes[toolbarFile], state.hashes[toolbarFile]);
 });
 
+test('POST /api/lib/save accepts an emptied part class string ("" — every chip removed), 200, file updated', async (t) => {
+  // Final-review fix (Finding 1): an emptied part is a legitimate save, not a 422 as if '' were an
+  // unsafe/hostile class string — see the matching writePart-level tests in shadcn-parts.test.ts.
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const dialogFile = join(f.root, 'src', 'ui', 'dialog.tsx');
+  const before = readFileSync(dialogFile, 'utf8');
+  const footerBefore = state.components.find((c: any) => c.slug === 'dialog').parts.find((p: any) => p.name === 'DialogFooter');
+  assert.ok(footerBefore.classes.length > 0, 'DialogFooter starts non-empty');
+
+  const res = await f.request('/api/lib/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ parts: { dialog: { DialogFooter: '' } }, hashes: state.hashes }),
+  });
+  assert.equal(res.status, 200);
+  const body = res.json();
+
+  const dialogAfter = body.components.find((c: any) => c.slug === 'dialog');
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogFooter').classes, '');
+  // Sibling part in the same file untouched.
+  assert.equal(dialogAfter.parts.find((p: any) => p.name === 'DialogHeader').classes, 'flex flex-col space-y-1.5 text-center sm:text-left');
+
+  const after = readFileSync(dialogFile, 'utf8');
+  assert.notEqual(after, before, 'the file was actually rewritten');
+  const spliceStart = before.indexOf(`"${footerBefore.classes}"`);
+  assert.ok(spliceStart >= 0);
+  assert.equal(after.slice(spliceStart, spliceStart + 2), '""', 'literal spliced to the empty string');
+  assert.equal(body.hashes[dialogFile], sha256(dialogFile));
+  assert.notEqual(body.hashes[dialogFile], state.hashes[dialogFile]);
+});
+
 test('POST /api/lib/save rejects an unsafe class string in a PART payload (quote breakout), 422, zero writes', async (t) => {
   const f = await libFixture(t);
   const state = (await f.request('/api/lib/state')).json();
@@ -594,62 +634,23 @@ test('POST /api/lib/save refuses a read-only part in the payload, naming the slu
   assert.equal(readFileSync(dialogFile, 'utf8'), before, 'dialog.tsx must be untouched');
 });
 
-test('GET /api/lib/state shows a quote-bearing part literal as read-only (new reason), and saving it 422s, but its sibling part in the SAME file saves fine sent alone — the request shape editor-lib.js\'s save() now sends', async (t) => {
-  // Read/write grammar asymmetry (review finding): `after:content-['']` is legit Tailwind and a
-  // real static literal (parseParts is right to resolve it) — but writePart's own grammar
-  // (SAFE_CLASS_LIST) forbids every quote character, so it can never actually be spliced back,
-  // even unchanged. inventory.ts's `withWriteGrammar` must catch this at inventory time so the
-  // state payload never shows it as editable; and because editor-lib.js's save() now sends only
-  // the PER-PART entries that actually changed (not a slug's whole draft map), a save touching
-  // just the sibling must succeed even though QuoteLiteral itself could never be saved.
+test('quoted part selectors remain editable and save safely alongside a sibling', async (t) => {
   const f = await libFixture(t, { extraFiles: { 'src/ui/quote-part.tsx': QUOTE_PART_TSX } });
-  const quotePartFile = join(f.root, 'src', 'ui', 'quote-part.tsx');
-  const state = (await f.request('/api/lib/state')).json();
-  const quotePart = state.components.find((c: any) => c.slug === 'quote-part');
-  assert.ok(quotePart, 'quote-part.tsx is inventoried');
-  assert.equal(quotePart.cva, undefined, 'quote-part.tsx has no cva() at all');
-
-  const quoteLiteral = quotePart.parts.find((p: any) => p.name === 'QuoteLiteral');
-  assert.equal(quoteLiteral.classes, "after:content-['']", 'the literal is still shown, unchanged, for display');
-  assert.equal(quoteLiteral.readOnlyReason, 'contains characters the editor cannot write back (quotes)');
-
-  const quoteSibling = quotePart.parts.find((p: any) => p.name === 'QuoteSibling');
-  assert.equal(quoteSibling.classes, 'block text-sm');
-  assert.equal(quoteSibling.readOnlyReason, undefined, 'the sibling is an ordinary editable part, unaffected');
-
-  // The file still joins the hash allowlist: QuoteSibling alone keeps it hashable even though
-  // QuoteLiteral doesn't (hashableComponent's existing span-based logic, unchanged).
-  assert.equal(state.hashes[quotePartFile], sha256(quotePartFile));
-
-  // Targeting the unwritable part directly 422s, naming it, and touches nothing.
-  const before = readFileSync(quotePartFile, 'utf8');
-  const badRes = await f.request('/api/lib/save', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ parts: { 'quote-part': { QuoteLiteral: "after:content-['']" } }, hashes: state.hashes }),
-  });
-  assert.equal(badRes.status, 422);
-  const badJson = badRes.json();
-  assert.equal(badJson.slug, 'quote-part');
-  assert.equal(badJson.partName, 'QuoteLiteral');
-  assert.equal(readFileSync(quotePartFile, 'utf8'), before, 'quote-part.tsx must be untouched');
-
-  // Sending ONLY the sibling's changed value (never QuoteLiteral's unchanged one alongside it — the
-  // exact shape editor-lib.js's save() now builds via changedParts()) saves cleanly.
-  const newSibling = 'block text-sm gap-1';
-  const goodRes = await f.request('/api/lib/save', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ parts: { 'quote-part': { QuoteSibling: newSibling } }, hashes: state.hashes }),
-  });
-  assert.equal(goodRes.status, 200);
-  const goodBody = goodRes.json();
-  const quotePartAfter = goodBody.components.find((c: any) => c.slug === 'quote-part');
-  assert.equal(quotePartAfter.parts.find((p: any) => p.name === 'QuoteSibling').classes, newSibling);
-  // QuoteLiteral itself is untouched by this save — still the original literal, still read-only.
-  assert.equal(quotePartAfter.parts.find((p: any) => p.name === 'QuoteLiteral').classes, "after:content-['']");
-  assert.equal(quotePartAfter.parts.find((p: any) => p.name === 'QuoteLiteral').readOnlyReason, 'contains characters the editor cannot write back (quotes)');
-  assert.match(readFileSync(quotePartFile, 'utf8'), /"block text-sm gap-1"/);
+  const file = join(f.root,'src/ui/quote-part.tsx');
+  const state=(await f.request('/api/lib/state')).json();
+  const part=state.components.find((c:any)=>c.slug==='quote-part').parts.find((p:any)=>p.name==='QuoteLiteral');
+  assert.equal(part.readOnlyReason,undefined);
+  const before=readFileSync(file,'utf8');
+  const bad=await f.request('/api/lib/save',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({parts:{'quote-part':{QuoteLiteral:"after:content-['new']"}},hashes:state.hashes})});
+  assert.equal(bad.status,422);
+  assert.equal(readFileSync(file,'utf8'),before);
+  const classes="after:content-[''] rounded-none";
+  const good=await f.request('/api/lib/save',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({parts:{'quote-part':{QuoteLiteral:classes,QuoteSibling:'block text-sm gap-1'}},hashes:state.hashes})});
+  assert.equal(good.status,200,good.text);
+  const parts=good.json().components.find((c:any)=>c.slug==='quote-part').parts;
+  assert.equal(parts.find((p:any)=>p.name==='QuoteLiteral').classes,classes);
+  assert.equal(parts.find((p:any)=>p.name==='QuoteLiteral').readOnlyReason,undefined);
+  assert.equal(parts.find((p:any)=>p.name==='QuoteSibling').classes,'block text-sm gap-1');
 });
 
 test('POST /api/lib/save rejects an unknown part name, naming the slug and part, zero writes', async (t) => {
@@ -946,7 +947,7 @@ test('GET / serves the bundled library-studio editor shell', async (t) => {
   const res = await f.request('/');
   assert.equal(res.status, 200);
   assert.match(String(res.headers['content-type']), /text\/html/);
-  assert.match(res.text, /Canon library studio/);
+  assert.match(res.text, /<title>Canon · Library Studio<\/title>/);
 });
 
 test('same-origin/host checks still apply to the library-mode server', async (t) => {
@@ -974,4 +975,77 @@ test('a NATIVE (non-adapter) project still serves the native studio, unaffected 
 
   const libRes = await request('/api/lib/state');
   assert.equal(libRes.status, 404, 'native mode never exposes library-mode endpoints');
+});
+
+test('draft preview applies component variants and parts across page instances without writing source', async (t) => {
+  const { request, root } = await libFixture(t, { extraFiles: { 'src/ui/card.tsx': 'export function Card({ className }) { return <div className={cn("rounded-lg border", className)} /> }\nexport function CardTitle({ className }) { return <div className={cn("text-xl", className)} /> }' } });
+  const before = (await request('/api/lib/state')).json();
+  const button = before.components.find((c: any) => c.slug === 'button');
+  const card = before.components.find((c: any) => c.slug === 'card');
+  const part = card.parts.find((p: any) => p.name === 'CardTitle');
+  const spec = structuredClone(button.cva);
+  spec.base = ['rounded-full', 'px-8'];
+  spec.variants.variant.default = ['bg-destructive'];
+  const response = await request('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+    theme: before.theme, components: { button: spec }, parts: { card: { [part.name]: 'text-3xl' } }, page: 'settings',
+  }) });
+  assert.equal(response.status, 200, response.text.slice(0, 500));
+  assert.ok((response.text.match(/data-inspect="button"/g) ?? []).length >= 3);
+  assert.match(response.text, /class="rounded-full bg-destructive h-9 px-4 py-2/);
+  assert.match(response.text, /data-part="CardTitle"[^>]*class="text-3xl"/);
+  assert.deepEqual((await request('/api/lib/state')).json(), before);
+  assert.ok(readFileSync(join(root, 'src/ui/button.tsx'), 'utf8').includes('cva('));
+});
+
+test('draft preview rejects unknown and read-only targets instead of silently dropping edits', async (t) => {
+  const { request } = await libFixture(t);
+  const state = (await request('/api/lib/state')).json();
+  for (const draft of [{ parts: { missing: { Nope: 'p-4' } } }, { parts: { button: { Nope: 'p-4' } } }]) {
+    const response = await request('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: state.theme, ...draft }) });
+    assert.equal(response.status, 422);
+  }
+});
+
+test('state and draft preview retain the theme file utility mapping without accepting draft overrides', async (t) => {
+  const { root, request } = await libFixture(t);
+  const path = join(root, 'app/globals.css');
+  writeFileSync(path, readFileSync(path, 'utf8') + '\n@theme inline { --radius-md: calc(var(--radius) * 0.8); }\n');
+  const state = (await request('/api/lib/state')).json();
+  assert.equal(state.theme.utilityTheme['radius-md'], 'calc(var(--radius) * 0.8)');
+  state.theme.utilityTheme['radius-md'] = '900px';
+  const response = await request('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: state.theme }) });
+  assert.equal(response.status, 200);
+  assert.match(response.text, /--radius-md: calc\(var\(--radius\) \* 0\.8\);/);
+  assert.doesNotMatch(response.text, /--radius-md: 900px/);
+});
+
+test('draft preview uses the project base layer without accepting client stylesheet overrides', async (t) => {
+  const { root, request } = await libFixture(t);
+  const path = join(root, 'app/globals.css');
+  writeFileSync(path, readFileSync(path, 'utf8') + '\n@layer base { * { @apply border-border outline-ring/50; } body { @apply text-sm; } }\n');
+  const state = (await request('/api/lib/state')).json();
+  assert.match(state.theme.baseCss, /@apply border-border outline-ring\/50/);
+  state.theme.baseCss = 'body { color: red; }';
+  const response = await request('/api/lib/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: state.theme }) });
+  assert.equal(response.status, 200);
+  assert.match(response.text, /@layer base \{[^]*@apply border-border outline-ring\/50/);
+  assert.doesNotMatch(response.text, /body \{ color: red; \}/);
+});
+
+
+test('POST theme preview renders real component overview without requiring a selected slug or writing sources', async t => {
+  const f=await libFixture(t,{extraFiles:{
+    'src/ui/button.tsx': `import React from 'react'; export function Button({children}){return <button data-slot="button">Actual button: {children}</button>}`,
+    'src/ui/badge.tsx': `import React from 'react'; export function Badge({children}){return <span data-slot="badge">Actual badge: {children}</span>}`,
+  }});
+  symlinkSync(resolve('node_modules'),join(f.root,'node_modules'));
+  mkdirSync(join(f.root,'src/lib'),{recursive:true});
+  writeFileSync(join(f.root,'src/lib/utils.ts'), `export function cn(...values){return values.filter(Boolean).join(' ')}`);
+  const state=(await f.request('/api/lib/state')).json();
+  const before=readFileSync(join(f.root,'src/ui/button.tsx'),'utf8');
+  const response=await f.request('/api/lib/preview',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({theme:state.theme,page:'theme',components:{},parts:{}})});
+  assert.equal(response.status,200,response.text);
+  assert.match(response.text,/data-preview-page="theme"/);
+  assert.match(response.text,/Actual button:/); assert.match(response.text,/Actual badge:/);
+  assert.equal(readFileSync(join(f.root,'src/ui/button.tsx'),'utf8'),before);
 });

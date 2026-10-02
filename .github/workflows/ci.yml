@@ -51,7 +51,7 @@ jobs:
       - run: npm run test:browser
 
   site:
-    name: Build public catalog
+    name: Build project site and docs
     needs: [test, browser]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -70,7 +70,7 @@ jobs:
           path: site
 
   deploy:
-    name: Deploy public catalog
+    name: Deploy project site and docs
     if: >-
       github.repository == 'marcosdocanto/canon' &&
       github.ref == 'refs/heads/main' &&

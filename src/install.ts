@@ -94,7 +94,11 @@ export function install(system: System, designDir: string, opts: InstallOptions)
   log.push('');
   log.push('Next:');
   const relDist = relative(root, dist).split(sep).join('/');
+  if (adapter) {
+    log.push('  1. Keep using your installed library components and existing theme CSS. Library mode edits those shared files; no generated Canon CSS import is needed.');
+  } else {
   log.push(`  1. Import the CSS once: \`import ${JSON.stringify(`./${relDist}/${system.meta.prefix}.css`)}\` (or <link>). Tailwind v4: also @import ${JSON.stringify(`./${relDist}/tailwind.theme.css`)}.`);
+  }
   log.push(`  2. Open the gallery: canon serve --design ${shellQuote(relDesign)}`);
   log.push(`  3. Agents start with DESIGN.compact.md + AGENTS.md/CLAUDE.md and retrieve relevant specs through Canon MCP or design source. Run \`canon check --design ${shellQuote(relDesign)}\` in CI.`);
   return { log };

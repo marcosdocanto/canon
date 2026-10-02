@@ -57,30 +57,71 @@ function buttonTrigger(ctx: Ctx, text: string, variant = 'outline'): { jsx: stri
   return { jsx: `<button type="button">${text}</button>`, imports: [] };
 }
 
-function hasRecharts(root: string): boolean {
+function hasDependency(root: string, name: string): boolean {
   try {
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-    return Boolean(pkg.dependencies?.recharts || pkg.devDependencies?.recharts);
+    return Boolean(pkg.dependencies?.[name] || pkg.devDependencies?.[name]);
   } catch { return false; }
 }
 
-/** Slugs with nothing presentable to show at all, and why — see the module docstring. */
-const STATIC_EXCLUDED: Record<string, string> = {
-  sonner: "a toaster renders nothing until a toast is triggered — there's no static content to show",
-  direction: 'DirectionProvider has no visual output of its own: a bare dir-context wrapper with no content',
-};
-
-/** The reason a slug is excluded from story generation, or `undefined` when it isn't. Mostly
- *  static (`STATIC_EXCLUDED`), except `chart`: its `ChartContainer` needs a real Recharts chart
- *  element as children, so it's only included when the target project actually depends on
- *  `recharts` — otherwise there is nothing honest to render. */
+/** Examples requiring a package are omitted explicitly when that dependency is unavailable. */
 export function exclusionReason(component: ComponentInfo, root: string): string | undefined {
-  if (STATIC_EXCLUDED[component.slug]) return STATIC_EXCLUDED[component.slug];
-  if (component.slug === 'chart' && !hasRecharts(root)) return 'recharts is not a dependency of this project — ChartContainer has no real chart to render';
+  if (component.slug === 'chart' && !hasDependency(root, 'recharts')) return 'recharts is not a dependency of this project — ChartContainer has no real chart to render';
+  if (component.slug === 'sonner' && !hasDependency(root, 'sonner')) return 'sonner is not a dependency of this project — the notification trigger cannot call its toast API';
   return undefined;
 }
 
+/** Keep overlays interactive and closed initially so a gallery does not immediately cover the
+ *  other examples or trap keyboard focus. Each family uses its real trigger and close controls. */
+function overlayExample(c: ComponentInfo, ctx: Ctx, family: string, title: string): CatalogResult | undefined {
+  const required = [family, `${family}Trigger`, `${family}Content`, `${family}Header`, `${family}Title`, `${family}Description`, `${family}Footer`];
+  const alert = family === 'AlertDialog';
+  const closing = alert ? [`${family}Cancel`, `${family}Action`] : [`${family}Close`];
+  if (!hasAll(c, [...required, ...closing])) return undefined;
+  const trigger = buttonTrigger(ctx, title);
+  const done = buttonTrigger(ctx, 'Done', 'default');
+  const controls = alert
+    ? `<AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction>Archive project</AlertDialogAction>`
+    : `<${family}Close asChild>${done.jsx}</${family}Close>`;
+  return {
+    ownNames: [...required, ...closing], imports: trigger.imports,
+    jsx: `<${family}>
+      <${family}Trigger asChild>${trigger.jsx}</${family}Trigger>
+      <${family}Content>
+        <${family}Header><${family}Title>${title}</${family}Title><${family}Description>${alert ? 'The project will be moved to your archive. You can restore it later.' : 'Review the details for your workspace.'}</${family}Description></${family}Header>
+        <${family}Footer>${controls}</${family}Footer>
+      </${family}Content>
+    </${family}>`,
+  };
+}
+
 const CATALOG: Record<string, CatalogBuilder> = {
+  card: (c, ctx) => {
+    if (!hasAll(c, ['Card', 'CardHeader', 'CardTitle', 'CardDescription', 'CardContent', 'CardFooter'])) return undefined;
+    const action = buttonTrigger(ctx, 'Create project', 'default');
+    return {
+      ownNames: ['CardHeader', 'CardTitle', 'CardDescription', 'CardContent', 'CardFooter'],
+      imports: action.imports,
+      jsx: `<Card className="w-full max-w-sm">
+        <CardHeader><CardTitle>New project</CardTitle><CardDescription>Start a shared space for your team.</CardDescription>${has(c, 'CardAction') ? `<CardAction>${action.jsx}</CardAction>` : ''}</CardHeader>
+        <CardContent><p>Keep your designs, discussions, and deliverables together.</p></CardContent>
+        <CardFooter>${action.jsx}</CardFooter>
+      </Card>`,
+    };
+  },
+
+  alert: (c) => {
+    if (!hasAll(c, ['Alert', 'AlertTitle', 'AlertDescription'])) return undefined;
+    return { ownNames: ['AlertTitle', 'AlertDescription'], jsx: `<Alert className="w-full max-w-md"><AlertTitle>Changes saved</AlertTitle><AlertDescription>Your team can now see the latest version of this project.</AlertDescription>${has(c, 'AlertAction') ? '<AlertAction>Saved</AlertAction>' : ''}</Alert>` };
+  },
+
+  calendar: (c) => ({ ownNames: [], jsx: `<Calendar mode="single" defaultMonth={new Date(2026, 9, 1)} />` }),
+
+  dialog: (c, ctx) => overlayExample(c, ctx, 'Dialog', 'Edit profile'),
+  'alert-dialog': (c, ctx) => overlayExample(c, ctx, 'AlertDialog', 'Archive project'),
+  sheet: (c, ctx) => overlayExample(c, ctx, 'Sheet', 'Project settings'),
+  drawer: (c, ctx) => overlayExample(c, ctx, 'Drawer', 'Weekly goal'),
+
   accordion: (c) => {
     if (!hasAll(c, ['AccordionItem', 'AccordionTrigger', 'AccordionContent'])) return undefined;
     return {
@@ -102,7 +143,21 @@ const CATALOG: Record<string, CatalogBuilder> = {
 
   avatar: (c) => {
     if (!has(c, 'AvatarFallback')) return undefined;
-    return { ownNames: ['AvatarFallback'], jsx: `<Avatar>\n    <AvatarFallback>CN</AvatarFallback>\n  </Avatar>` };
+    const image = has(c, 'AvatarImage')
+      ? `<AvatarImage alt="Alex Morgan" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Crect width='80' height='80' fill='%23dbeafe'/%3E%3Ccircle cx='40' cy='30' r='14' fill='%2364748b'/%3E%3Cpath d='M12 80a28 28 0 0 1 56 0' fill='%2364748b'/%3E%3C/svg%3E" />`
+      : '';
+    const badge = `<AvatarBadge aria-label="Available"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 4 4 10-10" /></svg></AvatarBadge>`;
+    const face = (initials: string, withImage = false, withBadge = false) =>
+      `<Avatar>${withImage ? image : ''}<AvatarFallback>${initials}</AvatarFallback>${withBadge ? badge : ''}</Avatar>`;
+    const example = (label: string, content: string) =>
+      `<figure style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 12, margin: 0 }}><figcaption>${label}</figcaption>${content}</figure>`;
+    const examples = [
+      ...(image ? [example('Image', face('AM', true))] : []),
+      example('Initials', face('CN')),
+      ...(has(c, 'AvatarBadge') ? [example('Status', face('AM', Boolean(image), true))] : []),
+      ...(has(c, 'AvatarGroup') ? [example('Group', `<AvatarGroup>${face('AM', Boolean(image))}${face('JD')}${face('CN')}${has(c, 'AvatarGroupCount') ? '<AvatarGroupCount>+3</AvatarGroupCount>' : ''}</AvatarGroup>`)] : []),
+    ];
+    return { ownNames: ['AvatarFallback'], jsx: `<div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 32 }}>${examples.join('')}</div>` };
   },
 
   checkbox: (c, ctx) => {
@@ -131,7 +186,7 @@ const CATALOG: Record<string, CatalogBuilder> = {
       ownNames: ['RadioGroupItem'],
       imports: [...l1.imports, ...l2.imports],
       jsx: [
-        `<RadioGroup defaultValue="comfortable" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>`,
+        `<RadioGroup defaultValue="comfortable">`,
         `  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>`,
         `    <RadioGroupItem value="default" id="story-radio-1" />`,
         `    ${l1.jsx}`,
@@ -178,9 +233,13 @@ const CATALOG: Record<string, CatalogBuilder> = {
         `    <SelectValue placeholder="Select a fruit" />`,
         `  </SelectTrigger>`,
         `  <SelectContent>`,
+        hasAll(c, ['SelectGroup', 'SelectLabel']) ? `    <SelectGroup><SelectLabel>Fruit</SelectLabel>` : '',
         `    <SelectItem value="apple">Apple</SelectItem>`,
         `    <SelectItem value="banana">Banana</SelectItem>`,
         `    <SelectItem value="blueberry">Blueberry</SelectItem>`,
+        hasAll(c, ['SelectGroup', 'SelectLabel']) ? `    </SelectGroup>` : '',
+        has(c, 'SelectSeparator') ? `<SelectSeparator />` : '',
+        `<SelectItem value="other">Other</SelectItem>`,
         `  </SelectContent>`,
         `</Select>`,
       ].join('\n  '),
@@ -228,7 +287,7 @@ const CATALOG: Record<string, CatalogBuilder> = {
     ownNames: [],
     jsx: [
       `<div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>`,
-      `  <Skeleton style={{ height: 40, width: 40, borderRadius: 9999 }} />`,
+      `  <Skeleton style={{ height: 40, width: 40 }} />`,
       `  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>`,
       `    <Skeleton style={{ height: 12, width: 200 }} />`,
       `    <Skeleton style={{ height: 12, width: 160 }} />`,
@@ -245,8 +304,8 @@ const CATALOG: Record<string, CatalogBuilder> = {
     const trigger = buttonTrigger(ctx, 'Options');
     return {
       ownNames: ['DropdownMenuTrigger', 'DropdownMenuContent', 'DropdownMenuLabel', 'DropdownMenuSeparator', 'DropdownMenuItem'],
-      imports: trigger.imports,
-      jsx: [
+      imports: [...trigger.imports, { path: 'react', names: ['createElement', 'useState'] }],
+      jsx: `<>{createElement(function MenuDemo() { const [checked, setChecked] = useState(true); const [density, setDensity] = useState("comfortable"); return (${[
         `<DropdownMenu defaultOpen>`,
         `  <DropdownMenuTrigger asChild>${trigger.jsx}</DropdownMenuTrigger>`,
         `  <DropdownMenuContent>`,
@@ -255,17 +314,19 @@ const CATALOG: Record<string, CatalogBuilder> = {
         `    <DropdownMenuItem>Profile</DropdownMenuItem>`,
         `    <DropdownMenuItem>Billing</DropdownMenuItem>`,
         `    <DropdownMenuItem>Settings</DropdownMenuItem>`,
+        hasAll(c, ['DropdownMenuCheckboxItem', 'DropdownMenuRadioGroup', 'DropdownMenuRadioItem']) ? `<DropdownMenuCheckboxItem checked={checked} onCheckedChange={setChecked}>Show status</DropdownMenuCheckboxItem><DropdownMenuRadioGroup value={density} onValueChange={setDensity}><DropdownMenuRadioItem value="comfortable">Comfortable</DropdownMenuRadioItem><DropdownMenuRadioItem value="compact">Compact</DropdownMenuRadioItem></DropdownMenuRadioGroup>` : '',
+        hasAll(c, ['DropdownMenuSub', 'DropdownMenuSubTrigger', 'DropdownMenuSubContent']) ? `<DropdownMenuSub><DropdownMenuSubTrigger>More options</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuItem>Duplicate</DropdownMenuItem></DropdownMenuSubContent></DropdownMenuSub>` : '',
         `  </DropdownMenuContent>`,
         `</DropdownMenu>`,
-      ].join('\n  '),
+      ].join('\n  ')}); })}</>`,
     };
   },
 
   'context-menu': (c) => {
     if (!hasAll(c, ['ContextMenuTrigger', 'ContextMenuContent', 'ContextMenuItem'])) return undefined;
     return {
-      ownNames: ['ContextMenuTrigger', 'ContextMenuContent', 'ContextMenuItem'],
-      jsx: [
+      imports: [{ path: 'react', names: ['createElement', 'useState'] }],      ownNames: ['ContextMenuTrigger', 'ContextMenuContent', 'ContextMenuItem'],
+      jsx: `<>{createElement(function MenuDemo() { const [checked, setChecked] = useState(true); const [density, setDensity] = useState("comfortable"); return (${[
         `<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>`,
         `  <ContextMenu>`,
         `    <ContextMenuTrigger style={{ display: 'flex', height: 96, width: 240, alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px dashed var(--border)', fontSize: 13 }}>`,
@@ -275,19 +336,21 @@ const CATALOG: Record<string, CatalogBuilder> = {
         `      <ContextMenuItem>Back</ContextMenuItem>`,
         `      <ContextMenuItem>Forward</ContextMenuItem>`,
         `      <ContextMenuItem>Reload</ContextMenuItem>`,
+        hasAll(c, ['ContextMenuCheckboxItem', 'ContextMenuRadioGroup', 'ContextMenuRadioItem']) ? `<ContextMenuCheckboxItem checked={checked} onCheckedChange={setChecked}>Show status</ContextMenuCheckboxItem><ContextMenuRadioGroup value={density} onValueChange={setDensity}><ContextMenuRadioItem value="comfortable">Comfortable</ContextMenuRadioItem><ContextMenuRadioItem value="compact">Compact</ContextMenuRadioItem></ContextMenuRadioGroup>` : '',
+        hasAll(c, ['ContextMenuSub', 'ContextMenuSubTrigger', 'ContextMenuSubContent']) ? `<ContextMenuSub><ContextMenuSubTrigger>More options</ContextMenuSubTrigger><ContextMenuSubContent><ContextMenuItem>Duplicate</ContextMenuItem></ContextMenuSubContent></ContextMenuSub>` : '',
         `    </ContextMenuContent>`,
         `  </ContextMenu>`,
         `  <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>Context menus open on right-click — content isn't shown until triggered.</span>`,
         `</div>`,
-      ].join('\n  '),
+      ].join('\n  ')}); })}</>`,
     };
   },
 
   menubar: (c) => {
     if (!hasAll(c, ['MenubarMenu', 'MenubarTrigger', 'MenubarContent', 'MenubarItem', 'MenubarSeparator'])) return undefined;
     return {
-      ownNames: ['MenubarMenu', 'MenubarTrigger', 'MenubarContent', 'MenubarItem', 'MenubarSeparator'],
-      jsx: [
+      imports: [{ path: 'react', names: ['createElement', 'useState'] }],      ownNames: ['MenubarMenu', 'MenubarTrigger', 'MenubarContent', 'MenubarItem', 'MenubarSeparator'],
+      jsx: `<>{createElement(function MenuDemo() { const [checked, setChecked] = useState(true); const [density, setDensity] = useState("comfortable"); return (${[
         `<Menubar defaultValue="file">`,
         `  <MenubarMenu value="file">`,
         `    <MenubarTrigger>File</MenubarTrigger>`,
@@ -296,6 +359,8 @@ const CATALOG: Record<string, CatalogBuilder> = {
         `      <MenubarItem>New Window</MenubarItem>`,
         `      <MenubarSeparator />`,
         `      <MenubarItem>Share</MenubarItem>`,
+        hasAll(c, ['MenubarCheckboxItem', 'MenubarRadioGroup', 'MenubarRadioItem']) ? `<MenubarCheckboxItem checked={checked} onCheckedChange={setChecked}>Show status</MenubarCheckboxItem><MenubarRadioGroup value={density} onValueChange={setDensity}><MenubarRadioItem value="comfortable">Comfortable</MenubarRadioItem><MenubarRadioItem value="compact">Compact</MenubarRadioItem></MenubarRadioGroup>` : '',
+        hasAll(c, ['MenubarSub', 'MenubarSubTrigger', 'MenubarSubContent']) ? `<MenubarSub><MenubarSubTrigger>More options</MenubarSubTrigger><MenubarSubContent><MenubarItem>Duplicate</MenubarItem></MenubarSubContent></MenubarSub>` : '',
         `    </MenubarContent>`,
         `  </MenubarMenu>`,
         `  <MenubarMenu value="edit">`,
@@ -306,7 +371,7 @@ const CATALOG: Record<string, CatalogBuilder> = {
         `    </MenubarContent>`,
         `  </MenubarMenu>`,
         `</Menubar>`,
-      ].join('\n  '),
+      ].join('\n  ')}); })}</>`,
     };
   },
 
@@ -393,7 +458,7 @@ const CATALOG: Record<string, CatalogBuilder> = {
     return {
       ownNames: ['CommandInput', 'CommandList', 'CommandGroup', 'CommandItem'],
       jsx: [
-        `<Command style={{ width: 320, border: '1px solid var(--border)', borderRadius: 12 }}>`,
+        `<Command style={{ width: 320 }}>`,
         `  <CommandInput placeholder="Type a command or search..." />`,
         `  <CommandList>`,
         `    <CommandGroup heading="Suggestions">`,
@@ -446,7 +511,7 @@ const CATALOG: Record<string, CatalogBuilder> = {
   'scroll-area': () => ({
     ownNames: [],
     jsx: [
-      `<ScrollArea style={{ height: 160, width: 260 }} className="rounded-md border">`,
+      `<ScrollArea style={{ height: 160, width: 260 }}>`,
       `  <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>`,
       `    <div style={{ fontSize: 14 }}>Item one</div>`,
       `    <div style={{ fontSize: 14 }}>Item two</div>`,
@@ -463,10 +528,12 @@ const CATALOG: Record<string, CatalogBuilder> = {
 
   resizable: (c) => {
     if (!hasAll(c, ['ResizablePanelGroup', 'ResizablePanel', 'ResizableHandle'])) return undefined;
+    const source = existsSync(c.file) ? readFileSync(c.file, 'utf8') : '';
+    const orientationProp = /\bResizablePrimitive\.Group\b/.test(source) ? 'orientation' : 'direction';
     return {
       ownNames: ['ResizablePanelGroup', 'ResizablePanel', 'ResizableHandle'],
       jsx: [
-        `<ResizablePanelGroup direction="horizontal" style={{ height: 160, width: 320 }} className="rounded-lg border">`,
+        `<ResizablePanelGroup ${orientationProp}="horizontal" style={{ height: 160, width: 320 }}>`,
         `  <ResizablePanel defaultSize={50}>`,
         `    <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>One</div>`,
         `  </ResizablePanel>`,
@@ -516,7 +583,7 @@ const CATALOG: Record<string, CatalogBuilder> = {
 
   'aspect-ratio': () => ({
     ownNames: [],
-    jsx: `<AspectRatio ratio={16 / 9} style={{ width: 280 }} className="rounded-lg bg-muted" />`,
+    jsx: `<div style={{ width: 280 }}><AspectRatio ratio={16 / 9}><img alt="Landscape sample" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 180'%3E%3Crect width='320' height='180' fill='%23dbeafe'/%3E%3Cpath d='M0 180 100 50 200 180 270 80 320 180' fill='%2364748b'/%3E%3C/svg%3E" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /></AspectRatio></div>`,
   }),
 
   kbd: (c) => {
@@ -635,6 +702,7 @@ const CATALOG: Record<string, CatalogBuilder> = {
         `      <FieldLabel htmlFor="story-field-email">Email</FieldLabel>`,
         `      ${control}`,
         `      <FieldDescription>We'll only use this to contact you.</FieldDescription>`,
+        has(c, 'FieldError') ? `<FieldError>Please enter a valid email address.</FieldError>` : '',
         `    </Field>`,
         `  </FieldGroup>`,
         `</FieldSet>`,
@@ -657,21 +725,23 @@ const CATALOG: Record<string, CatalogBuilder> = {
     return {
       ownNames: ['InputGroupInput', 'InputGroupAddon', 'InputGroupText'],
       jsx: [
-        `<InputGroup className="w-64">`,
+        `<><InputGroup className="w-64">`,
         `  <InputGroupInput placeholder="Search..." />`,
         `  <InputGroupAddon align="inline-end">`,
         `    <InputGroupText>⌘K</InputGroupText>`,
         `  </InputGroupAddon>`,
         `</InputGroup>`,
+        has(c, 'InputGroupTextarea') ? `<InputGroup><InputGroupTextarea placeholder="Write a message..." />${has(c, 'InputGroupButton') ? '<InputGroupAddon align="block-end"><InputGroupButton>Send</InputGroupButton></InputGroupAddon>' : ''}</InputGroup>` : '',
+        `</>`,
       ].join('\n  '),
     };
   },
 
   bubble: (c) => {
-    if (!hasAll(c, ['Bubble', 'BubbleContent'])) return undefined;
+    if (!hasAll(c, ['BubbleGroup', 'Bubble', 'BubbleContent'])) return undefined;
     return {
-      ownNames: ['Bubble', 'BubbleContent'],
-      jsx: `<BubbleGroup style={{ width: 280 }}>\n    <Bubble><BubbleContent>Hello! Glad to see this rendering correctly.</BubbleContent></Bubble>\n  </BubbleGroup>`,
+      ownNames: ['BubbleGroup', 'Bubble', 'BubbleContent'],
+      jsx: `<BubbleGroup className="w-full max-w-sm">\n    <Bubble variant="muted"><BubbleContent>Can you share the updated designs?</BubbleContent></Bubble>\n    <Bubble align="end"><BubbleContent>Of course — the new project is ready to review.</BubbleContent></Bubble>\n  </BubbleGroup>`,
     };
   },
 
@@ -701,9 +771,9 @@ const CATALOG: Record<string, CatalogBuilder> = {
       ownNames: ['MessageScrollerProvider', 'MessageScroller', 'MessageScrollerViewport', 'MessageScrollerContent', 'MessageScrollerItem'],
       jsx: [
         `<MessageScrollerProvider>`,
-        `  <MessageScroller style={{ height: 160, width: 280 }} className="rounded-lg border">`,
+        `  <MessageScroller style={{ height: 160, width: 280 }}>`,
         `    <MessageScrollerViewport>`,
-        `      <MessageScrollerContent style={{ padding: 12, gap: 8 }}>`,
+        `      <MessageScrollerContent>`,
         `        <MessageScrollerItem>Message one</MessageScrollerItem>`,
         `        <MessageScrollerItem>Message two</MessageScrollerItem>`,
         `        <MessageScrollerItem>Message three</MessageScrollerItem>`,
@@ -735,17 +805,44 @@ const CATALOG: Record<string, CatalogBuilder> = {
     };
   },
 
+  sonner: (c, ctx) => {
+    if (!has(c, 'Toaster') || !hasDependency(ctx.root, 'sonner')) return undefined;
+    const trigger = buttonTrigger(ctx, 'Show notification');
+    const button = (text:string, action:string) => trigger.jsx.replace('Show notification', text).replace(/<(Button|button)(?=[\s>])/, `<$1 onClick={() => ${action}}`);
+    return {
+      ownNames: ['Toaster'],
+      imports: [...trigger.imports, {path:'sonner',names:['toast']}, {path:'react',names:['createElement','useState','useEffect']}],
+      jsx: `{createElement(function NotificationDemo(){const [theme,setTheme]=useState(()=>typeof document!=='undefined'&&document.documentElement.classList.contains('dark')?'dark':'light');useEffect(()=>{const update=()=>setTheme(document.documentElement.classList.contains('dark')?'dark':'light');const observer=new MutationObserver(update);observer.observe(document.documentElement,{attributes:true,attributeFilter:['class']});update();return()=>observer.disconnect();},[]);return <div style={{display:'grid',gap:16}}><p style={{fontSize:13,color:'var(--muted-foreground)'}}>Send a notification to see your library’s toast styles.</p><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>${button('Show notification', "toast('Changes saved', {description:'Your workspace is up to date.'})")}${button('Success', "toast.success('Project published', {description:'Your team can now see the latest version.'})")}${button('Error', "toast.error('Could not save changes', {description:'Try again in a moment.'})")}</div><Toaster theme={theme} position="bottom-right" /></div>})}`,
+    };
+  },
+
+  direction: (c, ctx) => {
+    if (!has(c, 'DirectionProvider')) return undefined;
+    const trigger = buttonTrigger(ctx, 'Left to right');
+    const tabs = ctx.lookup('tabs');
+    const tabsNames = ['Tabs','TabsList','TabsTrigger','TabsContent'];
+    const hasTabs = tabs && hasAll(tabs,tabsNames);
+    const control = (dir:string,label:string) => trigger.jsx.replace('Left to right',label).replace(/<(Button|button)(?=[\s>])/, `<$1 aria-pressed={direction==='${dir}'} onClick={()=>setDirection('${dir}')}`);
+    return {
+      ownNames: ['DirectionProvider'],
+      imports: [...trigger.imports, {path:'react',names:['createElement','useState']}, ...(hasTabs ? [{path:tabs.importPath,names:tabsNames}] : [])],
+      jsx: `{createElement(function DirectionDemo(){const [direction,setDirection]=useState('ltr');return <div style={{display:'grid',gap:20,maxWidth:520}}><div role="group" aria-label="Text direction" style={{display:'flex',gap:8}}>${control('ltr','Left to right')}${control('rtl','Right to left')}</div><DirectionProvider dir={direction}><section dir={direction} style={{display:'grid',gap:16,border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:20}}><p style={{fontSize:12,color:'var(--muted-foreground)'}}>{direction==='rtl'?'Right-to-left layout':'Left-to-right layout'}</p>${hasTabs ? '<Tabs defaultValue="account"><TabsList><TabsTrigger value="account">Account</TabsTrigger><TabsTrigger value="team">Team</TabsTrigger><TabsTrigger value="billing">Billing</TabsTrigger></TabsList><TabsContent value="account">Manage your profile and personal preferences.</TabsContent><TabsContent value="team">Invite teammates and manage access.</TabsContent><TabsContent value="billing">Review your plan and invoices.</TabsContent></Tabs>' : '<p>Manage your workspace and personal preferences.</p>'}<div style={{display:'flex',justifyContent:'space-between',gap:16}}><span>Start</span><span>End</span></div></section></DirectionProvider></div>})}`,
+    };
+  },
+
   chart: (c, ctx) => {
-    if (!hasRecharts(ctx.root)) return undefined; // exclusionReason() keeps this slug out of generation entirely in that case
+    if (!hasDependency(ctx.root, 'recharts')) return undefined; // exclusionReason() keeps this slug out of generation entirely in that case
     return {
       ownNames: [],
       imports: [{ path: 'recharts', names: ['BarChart', 'Bar', 'XAxis', 'CartesianGrid'] }],
       jsx: [
-        `<ChartContainer config={{ visitors: { label: 'Visitors', color: 'var(--primary)' } }} style={{ width: 320 }}>`,
+        `<ChartContainer config={{ visitors: { label: 'Visitors', color: 'var(--chart-1, var(--primary))' } }} style={{ width: 320 }}>`,
         `  <BarChart data={[{ month: 'Jan', visitors: 186 }, { month: 'Feb', visitors: 305 }, { month: 'Mar', visitors: 237 }]}>`,
         `    <CartesianGrid vertical={false} />`,
         `    <XAxis dataKey="month" tickLine={false} axisLine={false} />`,
-        `    <Bar dataKey="visitors" fill="var(--color-visitors)" radius={4} />`,
+        `    <Bar dataKey="visitors" fill="var(--color-visitors)" />`,
+        hasAll(c, ['ChartTooltip', 'ChartTooltipContent']) ? `<ChartTooltip content={<ChartTooltipContent />} />` : '',
+        hasAll(c, ['ChartLegend', 'ChartLegendContent']) ? `<ChartLegend content={<ChartLegendContent />} />` : '',
         `  </BarChart>`,
         `</ChartContainer>`,
       ].join('\n  '),
@@ -757,7 +854,7 @@ const CATALOG: Record<string, CatalogBuilder> = {
     return {
       ownNames: ['SidebarProvider', 'Sidebar', 'SidebarHeader', 'SidebarContent', 'SidebarGroup', 'SidebarGroupLabel', 'SidebarGroupContent', 'SidebarMenu', 'SidebarMenuItem', 'SidebarMenuButton', 'SidebarInset'],
       jsx: [
-        `<SidebarProvider style={{ height: 320, width: 480 }} className="rounded-lg border">`,
+        `<SidebarProvider style={{ height: 320, width: 480 }}>`,
         `  <Sidebar collapsible="none" className="w-56">`,
         `    <SidebarHeader><div style={{ fontSize: 14, fontWeight: 500, padding: 8 }}>Acme Inc</div></SidebarHeader>`,
         `    <SidebarContent>`,
@@ -803,5 +900,11 @@ const CATALOG: Record<string, CatalogBuilder> = {
  *  template's required parts aren't actually present) — the caller (stories.ts) falls back to the
  *  compound/generic path in that case. */
 export function catalogStory(component: ComponentInfo, root: string, lookup: Lookup): CatalogResult | undefined {
-  return CATALOG[component.slug]?.(component, { root, lookup });
+  const example = CATALOG[component.slug]?.(component, { root, lookup });
+  if (!example) return undefined;
+  const own = names(component);
+  const imported = new Set(example.imports?.flatMap((entry) => entry.names) ?? []);
+  const referenced = [...example.jsx.matchAll(/<([A-Z][A-Za-z0-9_]*)\b/g)].map((match) => match[1]);
+  if (referenced.some((name) => !own.has(name) && !imported.has(name))) return undefined;
+  return { ...example, ownNames: [...new Set([...example.ownNames, ...referenced.filter((name) => own.has(name) && name !== component.exportName)])] };
 }

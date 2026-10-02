@@ -38,7 +38,7 @@ const designDir = () => {
   return existsSync(join(from, 'system.json')) ? from : join(from, 'design');
 };
 
-const HELP = `canon ${VERSION} — design systems that AI agents cannot get wrong.
+const HELP = `canon ${VERSION} — the design harness for coding agents.
 
 Usage
   canon connect <studio-url|snapshot.json> [--root .] [--design design] [--no-hooks]

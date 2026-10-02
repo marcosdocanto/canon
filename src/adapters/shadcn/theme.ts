@@ -2,6 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { Write } from '../../design-files.ts';
 import type { LibraryTheme } from '../types.ts';
+import { readPreviewCss } from './preview-css.ts';
 import { readConfig } from './config.ts';
 
 interface CssBlock { selector: string; body: string; bodyStart: number; bodyEnd: number; }
@@ -106,6 +107,8 @@ function candidateBlocks(css: string): CssBlock[] {
   return blocks;
 }
 
+const isFontFamily = (name: string): boolean => /^font-(?!weight(?:-|$))[A-Za-z0-9-]+$/.test(name);
+
 const VAR_DECL = /--([A-Za-z0-9-]+)\s*:\s*([^;]+);/g;
 
 type ManagedKind = 'root' | 'dark';
@@ -178,7 +181,54 @@ export function readTheme(root: string): LibraryTheme {
   for (const [name, value] of darkVars) {
     if (!(name in vars)) vars[name] = { light: value, dark: value };
   }
-  return { file: cssFile, vars };
+  // Read-only Tailwind mappings preserve the project's radius/font/spacing conventions.
+  const utilityTheme: Record<string, string> = {};
+  for (const block of topLevelBlocks(css)) {
+    if (!/^@theme(?:\s+inline)?$/.test(block.selector)) continue;
+    for (const match of stripComments(block.body).matchAll(VAR_DECL)) {
+      const value = match[2].trim();
+      if (!/[{}<>;]/.test(value)) utilityTheme[match[1]] = value;
+    }
+  }
+  // Font families in @theme are editable through the same draft vars API.
+  // Their original location is rediscovered by writeTheme, not trusted from the client.
+  for (const [name, value] of Object.entries(utilityTheme)) {
+    if (isFontFamily(name) && !(name in vars)) vars[name] = { light: value };
+  }
+  const baseCss = topLevelBlocks(css).filter((block) => /^@layer\s+base$/.test(block.selector)).map((block) => {
+    // v3 themes put managed variables in this layer too: draft vars must remain authoritative.
+    const rules = topLevelBlocks(block.body).map((rule) => `${rule.selector} {${managedKind(rule.selector) ? rule.body.replace(VAR_DECL, '') : rule.body}}`).join('\n');
+    return `@layer base {\n${rules}\n}`;
+  }).join('\n');
+  const stripDeclarations = (body: string, names: Set<string>): string => {
+    // Only top-level declarations: nested keyframes and CSS rules stay intact.
+    let depth=0, quote='', comment=false;
+    const top=new Set<number>();
+    for(let i=0;i<body.length;i++){
+      if(comment){if(body[i]==='*' && body[i+1]==='/'){comment=false;i++;}continue;}
+      if(quote){if(body[i]==='\\'){i++;continue;}if(body[i]===quote)quote='';continue;}
+      if(body[i]==='/' && body[i+1]==='*'){comment=true;i++;continue;}
+      if(body[i]==='"' || body[i]==="'"){quote=body[i];continue;}
+      if(body[i]==='{')depth++;else if(body[i]==='}')depth--;
+      else if(depth===0)top.add(i);
+    }
+    return body.replace(VAR_DECL,(declaration,name,_value,offset)=>top.has(offset) && names.has(name)?'':declaration);
+  };
+  const stripManaged = (source:string):string => {
+    const spans: {start:number;end:number;text:string}[]=[];
+    for(const block of topLevelBlocks(source)){
+      let body=block.body;
+      if(managedKind(block.selector)) body=stripDeclarations(body,new Set(Object.keys(vars)));
+      else if(/^@theme(?:\s+inline)?$/.test(block.selector)) body=stripDeclarations(body,new Set(Object.keys(utilityTheme)));
+      else if(/^@layer\b/.test(block.selector))body=stripManaged(body);
+      if(body!==block.body)spans.push({start:block.bodyStart,end:block.bodyEnd,text:body});
+    }
+    let out=source;
+    for(const span of spans.reverse())out=out.slice(0,span.start)+span.text+out.slice(span.end);
+    return out;
+  };
+  const preview = readPreviewCss(cssFile, stripManaged);
+  return { file: cssFile, vars, ...preview, ...(baseCss ? { baseCss } : {}), ...(Object.keys(utilityTheme).length ? { utilityTheme } : {}) };
 }
 
 /** The indentation used by the block's existing declarations, or a two-space default. */
@@ -204,6 +254,19 @@ export function writeTheme(root: string, theme: LibraryTheme): Write[] {
   const css = readFileSync(file, 'utf8');
 
   const spans: { start: number; end: number; text: string }[] = [];
+  const diskVars = parseVarBlocks(css);
+  const utilityOnlyFonts = new Set<string>();
+  for (const block of topLevelBlocks(css)) {
+    if (!/^@theme(?:\s+inline)?$/.test(block.selector)) continue;
+    for (const { name, valueStart, valueEnd } of findVarPositions(block.body)) {
+      if (!isFontFamily(name) || diskVars.root.has(name) || diskVars.dark.has(name)) continue;
+      utilityOnlyFonts.add(name);
+      const value = theme.vars[name];
+      if (!value) continue;
+      if (value.dark !== undefined && value.dark !== value.light) throw new Error(`shadcn adapter: ${name} is shared across appearances in @theme; edit its light value`);
+      spans.push({ start: block.bodyStart + valueStart, end: block.bodyStart + valueEnd, text: value.light });
+    }
+  }
   for (const block of candidateBlocks(css)) {
     const kind = managedKind(block.selector);
     if (!kind) continue;
@@ -221,7 +284,7 @@ export function writeTheme(root: string, theme: LibraryTheme): Write[] {
     const indent = blockIndent(block.body);
     let appended = '';
     for (const [name, value] of Object.entries(theme.vars)) {
-      if (present.has(name)) continue;
+      if (present.has(name) || utilityOnlyFonts.has(name)) continue;
       const next = kind === 'root' ? value.light : value.dark;
       if (next === undefined) continue;
       appended += `${indent}--${name}: ${next};\n`;

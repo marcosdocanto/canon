@@ -468,6 +468,49 @@ test('writePart throws naming the part when it is read-only, writing nothing', (
   assert.equal(readFileSync(dialog.file, 'utf8'), before, 'a rejected writePart call must never touch the file');
 });
 
+test('writePart accepts an emptied class list ("" — every chip removed in the editor), splicing "" into the literal', (t) => {
+  // Final-review fix (Finding 1): removing every chip in the editor sets the draft to '', and the
+  // cva editor already allows emptying a class list the same way (validateClassList([]) on an
+  // empty array trivially passes) — so a part's classes must be allowed to go empty too, not 422
+  // as if '' were a hostile string.
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  const before = readFileSync(dialog.file, 'utf8');
+  const footerBefore = dialog.parts!.find((p) => p.name === 'DialogFooter')!;
+  assert.ok(footerBefore.span);
+
+  const write = writePart(dialog, 'DialogFooter', '');
+  installFiles(root, [write]);
+  const after = readFileSync(dialog.file, 'utf8');
+
+  // Byte-identical outside the spliced span; the literal becomes exactly `""` (quote style
+  // preserved), nothing deleted or substituted.
+  assert.equal(after.slice(0, footerBefore.span!.start), before.slice(0, footerBefore.span!.start), 'prefix byte-identical');
+  const beforeSuffix = before.slice(footerBefore.span!.end);
+  assert.equal(after.slice(after.length - beforeSuffix.length), beforeSuffix, 'suffix byte-identical');
+  assert.equal(after.slice(footerBefore.span!.start, footerBefore.span!.start + 2), '""', 'literal spliced to the empty string, quote style preserved');
+  assert.equal(after.length, before.length - (footerBefore.span!.end - footerBefore.span!.start) + 2);
+
+  // Fixed point: re-inventorying reads DialogFooter back as editable, classes === ''.
+  const reInventoried = inventory(root).find((i) => i.slug === 'dialog')!;
+  const footerAfter = reInventoried.parts!.find((p) => p.name === 'DialogFooter')!;
+  assert.equal(footerAfter.classes, '');
+  assert.ok(footerAfter.span, 'still editable — the part can be filled back in later');
+
+  // A sibling part in the same file is untouched.
+  const headerAfter = reInventoried.parts!.find((p) => p.name === 'DialogHeader')!;
+  assert.equal(headerAfter.classes, 'flex flex-col space-y-1.5 text-center sm:text-left');
+});
+
+test('writePart treats a whitespace-only class string the same as fully empty, normalizing the spliced literal to ""', (t) => {
+  const root = clone(t);
+  const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
+  const write = writePart(dialog, 'DialogFooter', '   ');
+  installFiles(root, [write]);
+  const reInventoried = inventory(root).find((i) => i.slug === 'dialog')!;
+  assert.equal(reInventoried.parts!.find((p) => p.name === 'DialogFooter')!.classes, '', 'whitespace-only input normalizes to the canonical empty string, not preserved verbatim');
+});
+
 test('writePart rejects an injection attempt in classes (quote breakout), writing nothing', (t) => {
   const root = clone(t);
   const dialog = inventory(root).find((i) => i.slug === 'dialog')!;
@@ -485,4 +528,19 @@ test('writePart rejects classes containing braces or a backtick, writing nothing
 test('writePart is exposed on the shadcn adapter object', async () => {
   const { shadcnAdapter } = await import('../src/adapters/shadcn/index.ts');
   assert.equal(typeof shadcnAdapter.writePart, 'function');
+});
+
+test('a static native wrapper records its direct styled child for preview without changing the editable span', () => {
+  const source = 'export function Table({ className }) { return <div className="relative w-full overflow-x-auto"><table className={cn("w-full text-sm", className)} /></div> }';
+  const [part] = parseParts(source);
+  assert.equal(part.classes, 'relative w-full overflow-x-auto');
+  assert.deepEqual(part.previewChild, { wrapperTag: 'div', tag: 'table', classes: 'w-full text-sm' });
+  assert.equal(source.slice(part.span!.start, part.span!.end), '"relative w-full overflow-x-auto"');
+});
+
+test('first CVA owner is the consuming export, not an earlier wrapper or another variants helper', async () => {
+  const { cvaOwner } = await import('../src/adapters/shadcn/parts.ts');
+  const source = `function BubbleGroup(){return <div/>} const bubbleVariants=cva('',{}); function Bubble(){return <div className={bubbleVariants({})}/>} const reactionVariants=cva('',{}); function BubbleReactions(){return <div className={reactionVariants({})}/>} export {BubbleGroup,Bubble,BubbleReactions};`;
+  assert.equal(cvaOwner(source,findCva(source)!), 'Bubble');
+  assert.equal(cvaOwner(`// fakeVariants()\n${source}`,findCva(`// fakeVariants()\n${source}`)!), 'Bubble');
 });

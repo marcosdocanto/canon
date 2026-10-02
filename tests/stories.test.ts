@@ -243,24 +243,27 @@ test('a labeled control (checkbox) falls back to a plain <label> — never a gue
 
 // --- Exclusion mechanism -----------------------------------------------------------------------
 
-test('an excluded slug (direction) gets no story written at all', (t) => {
+test('DirectionProvider gets an interactive LTR/RTL story', (t) => {
   const root = clone(t);
   const components = inventory(root);
-  assert.ok(components.some((c) => c.slug === 'direction'), 'fixture has a direction component to exclude');
+  assert.ok(components.some((c) => c.slug === 'direction'));
 
   const writes = storyWrites(root, shadcnAdapter, components);
-  assert.ok(!writes.some((w) => w.path === join(root, 'stories', 'canon', 'direction.stories.tsx')));
+  const direction=writes.find((w) => w.path === join(root, 'stories', 'canon', 'direction.stories.tsx'));
+  assert.ok(direction);
+  assert.match(direction.content.toString(), /DirectionProvider dir=\{direction\}/);
+  assert.match(direction.content.toString(), /setDirection\('rtl'\)/);
   // the rest of the batch is unaffected
   assert.ok(writes.some((w) => w.path === join(root, 'stories', 'canon', 'button.stories.tsx')));
 });
 
 test('storyWrites deletes a previously generated (GENERATED_MARK) story for a slug that is now excluded — stale cleanup', (t) => {
   const root = clone(t);
-  const components = inventory(root);
+  const components = [...inventory(root), {slug:'chart',file:'/unused/chart.tsx',exportName:'ChartContainer',importPath:'~/ui/chart'}];
   const storiesDir = join(root, 'stories', 'canon');
   mkdirSync(storiesDir, { recursive: true });
-  const target = join(storiesDir, 'direction.stories.tsx');
-  writeFileSync(target, `${GENERATED_MARK}\n// stale: direction used to be generated before it was excluded\n`);
+  const target = join(storiesDir, 'chart.stories.tsx');
+  writeFileSync(target, `${GENERATED_MARK}\n// stale: chart used to be generated before it was excluded\n`);
 
   storyWrites(root, shadcnAdapter, components); // side effect: deletes the stale excluded file
   assert.throws(() => readFileSync(target), /ENOENT/);
@@ -268,14 +271,14 @@ test('storyWrites deletes a previously generated (GENERATED_MARK) story for a sl
 
 test('storyWrites never deletes a hand-edited (unmarked) story for an excluded slug', (t) => {
   const root = clone(t);
-  const components = inventory(root);
+  const components = [...inventory(root), {slug:'chart',file:'/unused/chart.tsx',exportName:'ChartContainer',importPath:'~/ui/chart'}];
   const storiesDir = join(root, 'stories', 'canon');
   mkdirSync(storiesDir, { recursive: true });
-  const target = join(storiesDir, 'direction.stories.tsx');
-  writeFileSync(target, '// hand-written story for direction, not generated\nexport default {};\n');
+  const target = join(storiesDir, 'chart.stories.tsx');
+  writeFileSync(target, '// hand-written story for chart, not generated\nexport default {};\n');
 
   storyWrites(root, shadcnAdapter, components);
-  assert.equal(readFileSync(target, 'utf8'), '// hand-written story for direction, not generated\nexport default {};\n');
+  assert.equal(readFileSync(target, 'utf8'), '// hand-written story for chart, not generated\nexport default {};\n');
 });
 
 test('exclusionReason: chart is excluded only when the target project has no recharts dependency', (t) => {

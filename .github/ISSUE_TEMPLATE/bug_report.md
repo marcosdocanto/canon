@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible problem with Canon, its catalog or generated output.
+about: Report a reproducible problem with Canon Studio, source editing, adapters or generated output.
 title: ""
 labels: ""
 assignees: ""
@@ -26,7 +26,10 @@ Describe the expected result and the actual result, including who or what is aff
 - Operating system:
 - Browser and version, if relevant:
 - Framework and version, if relevant:
-- Preset, custom prefix, theme and viewport, if relevant:
+- Mode (installed library or native catalog):
+- Library, component, selected part/variant and changed property:
+- Does the issue happen in the draft, after Save, or in the app?
+- Theme and viewport, if relevant:
 
 ## Additional context
 

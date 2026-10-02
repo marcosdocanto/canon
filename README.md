@@ -2,164 +2,102 @@
 
 [![npm version](https://img.shields.io/npm/v/canon-ds?color=B4309F&logo=npm)](https://www.npmjs.com/package/canon-ds)
 
-**Connect Canon to your agent. Shape the design in Studio.**
+**The design harness for coding agents.**
 
-Canon is an open-source design system for apps built with coding agents. It provides shared tokens, components, page layouts, a visual Studio and focused instructions that keep interface work consistent.
+Canon connects a project’s design source to the coding agent building the product. It inventories the installed library, generates `AGENTS.md` instructions and design references, configures MCP tools, provides visual editing through Studio, and reports supported design violations.
 
-[Documentation and connection prompt](https://marcosdocanto.github.io/canon/) · [Explore the Studio](https://marcosdocanto.github.io/canon/preview.html) · [Contribute](CONTRIBUTING.md)
+A harness is the layer of context, instructions, tools and feedback around an agent. Studio is Canon’s visual editing surface; the harness also works in the repository and the agent’s workflow. Your coding agent still implements page composition, routes, data and application behavior.
 
-## Connect your agent
+The current library adapter supports **shadcn/ui**. Canon’s native generated catalog remains available as a separate workflow.
 
-Paste this into your coding agent's conversation for a new or existing project:
+[Documentation](https://marcosdocanto.github.io/canon/docs.html) · [Migration guide](docs/MIGRATION-0.2.md) · [Contribute](CONTRIBUTING.md)
 
-```text
-Use Canon as this project's design system.
-Read and follow: https://marcosdocanto.github.io/canon/CONNECT.md
-```
+The Library Studio interface is built with React and shadcn/ui controls. Its JavaScript and Tailwind CSS are bundled with the CLI, so the editor works offline without adding runtime dependencies to your project. Studio chrome uses its own neutral theme; the preview uses your library’s editable theme.
 
-The agent installs Canon, imports the design, connects its generated CSS to the existing app and opens the project's Studio. You can customize the design before building the first screen or at any point later. Reconnecting preserves existing Canon definitions and their configured path. You do not need to describe the app again.
+## From setup to everyday work
 
-The public site is a catalog. Your editable Studio runs locally, and your design files stay in the project. The application uses generated CSS through its own frontend and deployment stack; Canon requires no hosted service at runtime. Node.js **22.18.0 or newer** is needed for Canon's build tools and Studio.
+1. **Connect the library.** Adopt an existing shadcn/ui project without reseeding its theme, or initialize a library in a new framework app.
+2. **Install context.** Canon creates or updates its managed block in `AGENTS.md` and `CLAUDE.md`, preserving unrelated instructions. It generates `DESIGN.compact.md`, `DESIGN.md`, a Claude skill and Cursor rule, and configures Canon MCP for supported clients.
+3. **Build with the agent.** Start from the compact reference and use MCP to retrieve relevant rules and component details. Reuse installed components and theme tokens.
+4. **Refine in Studio.** Inspect real components and preview supported style changes before saving.
+5. **Save and sync.** Save updates shared source and generated references. The app reloads through its framework. Use `canon sync` after external design edits.
+6. **Check the result.** Run Canon’s checks, review the actual UI, and run the application’s own tests. Optional Claude edit hooks provide lint feedback; they are not enforcement or a guarantee of correctness.
 
-<details>
-<summary>npm installation reference</summary>
+See [the generated-file map](https://marcosdocanto.github.io/canon/docs.html#files) for exact paths and ownership. Generated reference files are replaced on refresh; put custom instructions outside the managed AGENTS.md/CLAUDE.md block. `--no-hooks` skips adding the optional hook, without removing an existing one.
 
-For an npm release, the agent can install the package directly:
+## Get started
+
+This guide covers **Canon 0.2**. See the [migration guide](docs/MIGRATION-0.2.md) when updating an existing project.
+
+## Library Studio
+
+Canon can edit an installed component library directly. The current adapter supports **shadcn/ui**. Start inside your application repository:
 
 ```sh
 npm install --save-dev canon-ds
-npx canon connect https://marcosdocanto.github.io/canon/CONNECT.md
+npx canon adopt                  # review the adoption plan
+npx canon adopt --apply          # preserve the installed components and theme
 npx canon studio --port 0 --open
 ```
 
-Use the project's existing package manager. The connection procedure also supports the site's downloadable package when a registry release is unavailable, retaining that archive in the project for future installs.
+For a new library in a framework application, use `npx canon init "My product" --lib shadcn` instead of adoption. Initialization installs a core selection when needed and applies a Canon preset; adoption preserves your existing theme. Add one component at a time with `npx canon add <slug>`.
 
-</details>
+**Theme** composes installed components into an overview. **Typography** shows type samples and project font configuration; it is not an installed Typography component. **Components** renders the project's actual React source with examples. The preview chrome switches light/dark, mobile/desktop, and interaction/inspection. No Storybook server is required for this live preview.
 
-## Use Studio
+Select a component or inspect its rendered parts. The inspector edits supported base classes, variant values, defaults, and static exported-part class literals. Theme controls edit declared CSS variables. Unsupported dynamic expressions and application behavior remain read-only with an explanation.
 
-Explore the public component catalog and page layouts. In the Studio opened by your agent, use **Customize → Style** to change the visual direction, or click a component with the editor open to adjust its parts in **Inspect**. Choose an example and compare desktop/mobile layouts at Fit or 100%.
+Draft changes compile in memory. **Save** writes supported changes to the project's actual shared theme and component source. **Reset** discards the unsaved draft. Applications importing those components receive saved styles through their normal development reload or next build. Canon does not deploy your application.
 
-In a bound Studio, **Save** atomically updates the design source, generated CSS and installed agent references. MCP reads the new build on its next data request, so there is no sync or reload step to ask for. The app reflects CSS changes through its framework's normal reload or build. Use **Undo** to revert an edit and save again when needed.
+**Reset ▾ → Full reset** restores the current official shadcn defaults for the style and base color in `components.json`: light/dark theme colors, radius, editable variants and component-part styles. Review the affected components and confirm **Restore defaults** to apply. This requires internet access; it is not a historical snapshot of the version originally installed. Project fonts, custom tokens, application logic and custom/read-only components are preserved. Canon saves the previous files with a `manifest.json` under `.canon/backups/library-reset/`, regenerates design references, and refuses the reset if files changed after review. No files are changed on cancellation or preparation failure. Legacy HSL themes, prefixed utilities, RTL layouts and translucent menus require matching defaults and are currently refused rather than reset incorrectly. Registry icon templates currently support Lucide.
 
-Screen layout, routes and application behavior remain agent work; Save does not rewrite or deploy the app. For design-source edits made outside Studio, run `canon sync`.
+A concurrent source change triggers a conflict instead of silently overwriting the file. Reload and reapply the intended changes. Source content outside the supported style edits is preserved. Use `canon sync` after external changes, `canon lint` for supported style checks, and `canon check` for build consistency. Component examples are compositions; they do not guarantee every possible prop, behavior, or state is represented.
 
-## Library studio
+See the [library guide](https://marcosdocanto.github.io/canon/docs.html#library). The public catalog and `canon connect` flow use Canon's **native** generated design mode; use `adopt` for an existing shadcn/ui project.
 
-To use Canon styling with an existing component library, run `canon init <name> --lib shadcn [--preset <preset>]` or `canon adopt` to adopt an existing library. Canon applies its styling on top of your components; in library mode, `canon studio` opens the library editor instead.
+## How Canon fits into your application
 
-The library editor has two tabs: **Theme** to define CSS variables with light and dark mode support, previewed against your repo's real component classes, and **Components** to edit CVA variant definitions for Canon-owned components (add or remove values, set defaults, adjust class lists); read-only components show why they cannot be edited.
-
-Below a component's variants, a **Parts** section lists its exported subcomponents (e.g. Dialog's `DialogContent`, `DialogTitle`, `DialogTrigger`) — the pieces of a component that style themselves with a plain `className` string instead of a `cva()`. A part with a static class literal is editable with the same chip editor as variants (autocomplete, add/remove, unknown-class warnings); any dynamic portion of its className (a `cn(...)` call's other arguments) shows read-only alongside the chips, and a part rendered from more than one branch of its component notes which branch is being edited. A part with no static literal to find — an aliased primitive, or one built entirely from dynamic classes — shows its name and the reason, with nothing to edit.
-
-Canon saves transactionally—theme files, CVA blocks and part class literals are rewritten in place with content outside Canon ownership unchanged, making concurrent application edits safe. A component file changed during editing triggers a 409 conflict and reload; reapply changes and save to continue. Canon owns CSS only (tokens, CVA, and now a part's own static className literal); application logic, markup and behavior remain yours. Use `canon lint` to check style violations, `canon check` to verify the build, or `canon storybook` to review components during editing.
-
-## Contribute
-
-Contributions to components, accessibility, performance, Studio, agent integrations and documentation are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), [component authoring](docs/AUTHORING.md) or [pattern authoring](docs/PATTERNS.md). Use an issue to report a reproducible problem or discuss a larger change, then open a focused pull request.
-
-Canon is distributed under the [MIT license](LICENSE). You can use it in personal, commercial and closed-source applications, subject to the license terms. [Third-party notices](THIRD_PARTY_NOTICES.md) cover the included icon references and external assets. Maintainers follow the [release guide](docs/RELEASING.md).
-
-<details>
-<summary>Technical reference for agents and contributors</summary>
-
-## How it stays consistent
-
-1. **Shared definitions.** `design/tokens.json`, component specs and patterns generate CSS, docs, React and the gallery from the same source. `src/engine.js` runs in Node and in the browser editor.
-2. **Focused agent context.** Start with `DESIGN.compact.md` and MCP's `design_rules`. Discover pieces with `search`, `list_components` or `list_patterns`; fetch only the required specs with `get_component` and `get_pattern`. Without MCP, read the relevant source JSON and sections of `DESIGN.md`.
-3. **Installed references.** `canon connect` builds and installs managed blocks in `AGENTS.md` and `CLAUDE.md`, the Claude Code skill, Cursor rule, MCP configuration and optional lint hook, then records the design path in `.canon/project.json`. `--no-hooks` skips adding the hook; it does not remove an existing one.
-4. **Code checks.** `canon lint` detects supported violations such as raw style values, Tailwind palette classes, unknown Canon classes and invalid prop values. `canon check` verifies a complete build, compiler version, source content and generated file hashes, then runs lint. Application tests and browser review cover the remaining delivery requirements.
-
-## Generated files
-
-With the default output directory, these files live in `design/dist/`:
-
-| File | Purpose |
+| Area | Source of truth |
 | --- | --- |
-| `<prefix>.css` | Complete token, reset, component and pattern styles, ready for a prototype. |
-| `tokens.css`, `base.css`, `components.css` | The same styles as separate layers. |
-| `css/components/<slug>.css`, `css/patterns/<slug>.css` | Individual styles for explicit imports of the pieces used by a product. |
-| `tailwind.theme.css`, `tailwind.preset.cjs` | Tailwind v4 and v3 themes mapped to the tokens. |
-| `react/` | Typed React wrappers for components and their parts. |
-| `tokens.dtcg.json` | Tokens in DTCG format. |
-| `preview.html`, `docs.html` | Studio and the user guide. |
-| `CONNECT.md` | Canon's setup procedure for agents connecting to a new or existing project. |
-| `DESIGN.compact.md`, `DESIGN.md` | Focused agent reference and the complete specification. |
-| `agents/` | Instructions, skill, rules and MCP configuration for installation. |
-| `canon.lock.json` | The build manifest verified by `canon check`. |
+| Theme colors, radius and declared font tokens | Your project’s theme CSS. |
+| Component base styles, variants and parts | Your installed component source. |
+| Overview and individual previews | Compositions of those installed components. |
+| Routes, page layout, data and business logic | Your application code. |
+| Coding-agent context | References generated from the project’s design. |
 
-For a product, the agent can import `tokens.css`, `base.css` and the individual component and pattern styles actually used, including components referenced by each pattern. This is an explicit integration choice; the agent should measure the resulting route rather than assume unused styles are automatically removed.
+The Theme overview is a selection of examples, not a claim that every installed component appears on one page. The component menu reflects the detected library inventory. Typography samples demonstrate project fonts; installing or loading a new font remains an application concern.
+
+## Everyday workflow
+
+- **Theme:** edit shared colors, including separate sidebar and chart tokens, for light and dark appearances.
+- **Typography:** edit the declared font families available to the project.
+- **Components:** inspect a base, variant or part, and edit supported shared styles.
+- **Save:** write to source; your application picks up changes through its development reload or next build.
+- **Reset:** discard the unsaved draft, without reverting previously saved source.
+
+An explicit component or instance override can take precedence over a theme token. Canon preserves those source choices. Chart series follow the token or value configured by the project; they are not universally forced to primary.
 
 ## Commands
 
-These are reference commands for the agent. Run them in the application repository and use `--design` consistently if the source lives outside `design/`.
-
-```text
-canon connect <Studio URL|/full/snapshot.json> --root <project-root>
-              [--design <existing-custom-path>] [--no-hooks]
-canon init <name> [--preset canon|editorial|vera|clean|dark] [--prefix app]
-                 [--brand '#B4309F'] [--font 'DM Sans'] [--design design]
-canon build [--design design] [--only react,preview]
-canon install [--design design] [--root .] [--no-hooks]
-canon sync [--design design] [--root .] [--no-hooks]
-canon studio --root <project-root> [--design design] [--port 0] [--open]
-canon serve                                  # alias for studio
-canon lint [paths…] [--design design] [--json] [--changed]
-canon check [--design design] [--root .]
-canon mcp [--design design]
-canon add <component-slug> [--design design]
-canon doctor [--design design]
-canon presets
-canon --help
-canon --version
+```sh
+npx canon adopt                  # inspect an existing library
+npx canon adopt --apply          # connect it without reseeding the theme
+npx canon init "My product" --lib shadcn  # initialize in a new framework app
+npx canon studio --port 0 --open
+npx canon add accordion          # install one component
+npx canon sync                   # refresh after external source edits
+npx canon lint                   # supported style checks
+npx canon check                  # build consistency and lint
+npx canon --help
 ```
 
-`connect` imports the saved snapshot from `./api/system` beside the connection document, or from a full local JSON path, only when the project has no configured design. Public sites hosted under a path such as `/canon/` retain that path. Otherwise the command reuses the source recorded in `.canon/project.json` without fetching or resetting it. For a legacy installation, discover its source and pass `--design`; never use `init` or a preset as fallback for a failed import.
+Lint can flag arbitrary utilities in upstream components. Review findings against the installed source; a lint finding alone does not justify replacing a library’s intended styles. Application behavior still needs its own tests and browser verification.
 
-`init` requires a name and builds automatically. Use `sync` after editing an existing source outside Studio; `init --force` intentionally resets its definitions. `add` imports a missing catalogue component. `hook` accepts the Claude Code edit event on stdin and is normally configured by `install`.
+## Native catalog
 
-`canon mcp` runs over stdio and is started by the agent client. It refreshes data on the request after a successful build. Agents read the current installed references at the beginning of UI work. `canon lint src app` checks those paths; use the application's actual directories and confirm the report covers the changed files.
+Existing native projects continue to use their JSON definitions and generated CSS. See the [native reference](docs/NATIVE.md). Adopting a shadcn library is a separate operation; upgrading Canon does not automatically migrate a native project.
 
-A build with `--only` selects optional generators while still generating CSS. Run a complete `canon build` before `canon check`. In CI, check versioned outputs directly; if outputs are generated in CI, build before checking.
+## Contribute and release
 
-## Local CLI reference
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for source locations and validation. See the [0.2 migration guide](docs/MIGRATION-0.2.md), [changelog](CHANGELOG.md), and [release guide](docs/RELEASING.md).
 
-The compiler and CLI have zero runtime dependencies and require Node.js **22.18.0 or newer**. A source checkout uses Node's native TypeScript support; packaged versions run compiled JavaScript.
-
-The Studio serves the connection procedure at `./CONNECT.md`, the saved snapshot at `./api/system` and an installable package at `./canon-package.tgz`. The public website exposes those files too. Registry releases use `canon-ds`; a retained archive also supports installations without registry access. A localhost URL works for an agent on the same computer. If the agent runs elsewhere, use the public URL or an address it can reach.
-
-From a source checkout, invoke `node bin/canon.js` directly, or create a short command once:
-
-```bash
-npm link
-canon --version
-```
-
-Then continue in the application's repository. Replace the checkout path when needed.
-
-Presets are `canon` (default), `editorial`, `vera`, `clean` and `dark`. `canon presets` describes their visual directions. Seed options include `--brand`, `--action`, `--font`, `--radius`, `--base`, `--control`, `--canvas`, `--ink`, `--mono`, `--display`, `--shadow-tint`, `--neutral-hue`, `--neutral-chroma` and `--theme`.
-
-Explicit seeds replace corresponding preset defaults. Deliberate token overrides live in `seeds.overrides`; defaults live in `seeds.presetOverrides`. Studio preserves hand-edited token values when changing unrelated seeds.
-
-## What is in the catalog
-
-- **Components** (`src/components/*.ts`, 90): actions (buttons, icon buttons, groups, close, social/app-store), forms (fields, inputs and groups, textarea, select, combobox, multi-select, checkbox, radio, switch, slider, segmented control, pin/number/tags inputs, date picker, color picker, file dropzone, rich text editor), navigation (sidebar family, topbar, header navigation, mobile header, tabs, breadcrumb, pagination, menu, command palette, stepper, page and section headers), data display (badge, badge group, tag, counter, avatar and groups, table, list, description list, stat/metrics, accordion, timeline, kanban, tree view, chart frame, rating, activity feed, messages, account card), feedback (alert, banner, toast, notification, progress bar and circle, spinner, skeleton, empty state, inline CTA, featured card), overlays (tooltip, popover, dialog, drawer), media (featured icon, media frame, carousel, video player, credit card), typography (kicker, prose, link, code, kbd).
-- **Patterns** (`src/patterns/*.ts`): application layouts and pages only — app shell, form layout, dashboard, settings, list with detail drawer, inbox / chat / notification center, onboarding wizard, profile, files, calendar, dialog and drawer flows, phone-width screens, first-run and empty states, billing and checkout, audit log, roles and permissions, auth and error pages — each with 2–6 layout variants, rendered at desktop and 375px in the gallery.
-- **Presets**: `canon` (default), `editorial`, `vera`, `clean`, `dark`.
-
-## Authoring
-
-Components live in `src/components/*.ts` as data (see `docs/AUTHORING.md`). Patterns (layouts, sections, pages) in `src/patterns/*.ts`. `canon init` copies them into a project's `design/` as JSON where they can be edited by hand or in the editor; `canon add <slug>` pulls a new catalog component into an existing project.
-
-## Tests
-
-```bash
-npm ci
-npm test
-npx playwright install chromium
-npm run test:browser
-```
-
-`npm run test:ci` typechecks the source and runs both suites. `npm run build` prepares the compiled `lib/` runtime; `npm pack` runs it automatically. The packaging tests install the tarball in a temporary consumer and exercise the CLI without runtime dependencies.
-
-</details>
+Canon is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md). The npm package remains `canon-ds` and the command remains `canon`.

@@ -436,7 +436,23 @@ function walkJsxElement(name: string, source: string, tagStart: number, limit: n
   let fallback: PartInfo | undefined;
   if (attr) {
     const resolved = resolveAttrValue(name, source, attr);
-    if (resolved.classes !== undefined) return { end: openEnd, part: resolved };
+    if (resolved.classes !== undefined) {
+      resolved.targetTag = /^<([\w.-]+)/.exec(source.slice(tagStart, openEnd))?.[1];
+      // Read-only structure for a native wrapper around one self-closing native element (Table).
+      // The editable span remains the first literal; never evaluate expressions or child exports.
+      const wrapperTag = /^<([a-z][a-z0-9-]*)\b/.exec(source.slice(tagStart, openEnd))?.[1];
+      const childStart = skipWsAndComments(source, openEnd, limit);
+      const childTag = /^<([a-z][a-z0-9-]*)\b/.exec(source.slice(childStart, limit))?.[1];
+      if (!selfClosing && wrapperTag && childTag) {
+        const child = scanOpenTag(source, childStart, limit);
+        const afterChild = skipWsAndComments(source, child.end, limit);
+        if (child.selfClosing && child.attr && source.startsWith(`</${wrapperTag}`, afterChild)) {
+          const childPart = resolveAttrValue(name, source, child.attr);
+          if (childPart.classes !== undefined) resolved.previewChild = { wrapperTag, tag: childTag, classes: childPart.classes };
+        }
+      }
+      return { end: openEnd, part: resolved };
+    }
     fallback = resolved; // dynamic/escaped/interpolated — a candidate reason, not a match
   }
   if (selfClosing) return { end: openEnd, fallback };
@@ -596,10 +612,12 @@ function resolveAttrValue(name: string, source: string, attr: AttrValue): PartIn
  * explicit disjointness check against `findCva`'s span; T3's same-file cva+parts composition must not
  * violate it either.
  */
-export function parseParts(source: string): PartInfo[] {
+export function parseParts(source: string, includeTargets = false): PartInfo[] {
   return componentWindows(source).map(({ name, start, end }) => {
     const candidates = findCandidateStarts(source, start, end);
-    return resolveFromCandidates(name, source, candidates, end);
+    const part = resolveFromCandidates(name, source, candidates, end);
+    if (!includeTargets) delete part.targetTag;
+    return part;
   });
 }
 
@@ -615,4 +633,24 @@ export function splicePart(source: string, part: PartInfo, classes: string): str
   const { start, end } = part.span;
   const quote = source[start];
   return source.slice(0, start) + quote + classes + quote + source.slice(end);
+}
+
+/** Locate the exported component that calls the first CVA binding. Ambiguous ownership is
+ * left unknown rather than assigning a wrapper or a second CVA helper to the first spec. */
+export function cvaOwner(source: string, span: {start:number;end:number}): string | undefined {
+  const binding = source.slice(0,span.start).match(/\b(?:const|let|var)\s+([\w$]+)\s*=\s*$/)?.[1];
+  if (!binding) return undefined;
+  const owners = componentWindows(source).filter(({start,end}) => {
+    for (let i=start;i<end;i++) {
+      const skipped=skipNonCode(source,i);
+      if(skipped!==undefined){i=skipped-1;continue;}
+      if(i>=span.start && i<span.end){i=span.end-1;continue;}
+      if(source.startsWith(binding,i) && !IDENT_CHAR.test(source[i-1]??'') && !IDENT_CHAR.test(source[i+binding.length]??'')) {
+        const after=skipWsAndComments(source,i+binding.length,end);
+        if(source[after]==='(') return true;
+      }
+    }
+    return false;
+  });
+  return owners.length===1 ? owners[0].name : undefined;
 }

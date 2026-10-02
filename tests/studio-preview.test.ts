@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { createSystem } from '../src/system.ts';
 import { indexTokens } from '../src/engine.js';
+import { previewHtml as libraryPreviewHtml } from '../src/generators/preview-lib.ts';
 import { previewHtml } from '../src/generators/preview.ts';
 import { documentationHtml } from '../src/generators/documentation.ts';
 
@@ -185,4 +186,37 @@ test('the public catalog connects visitors to their own Studio without attemptin
   assert.doesNotMatch(await page.locator('#primeiro-projeto').innerText(), /clique em Save/);
   assert.deepEqual(apiRequests, []);
   assert.deepEqual(errors, []);
+});
+
+test('font utilities resolve live draft font families and dark overrides without navigation', async t => {
+  const browser = await chromium.launch({headless:true});
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const html = libraryPreviewHtml({file:'/test.css', vars:{
+    'font-sans':{light:'Arial, sans-serif',dark:'Georgia, serif'},
+    'font-heading':{light:'var(--font-sans)'},
+    'font-mono':{light:'"Courier New", monospace'},
+  },utilityTheme:{'font-sans':'"Original Font", sans-serif','font-heading':'var(--font-sans)'}},[])
+    .replace('</body>', '<p id="body-font" class="font-sans">Body</p><h1 id="heading-font" class="font-heading">Heading</h1><code id="code-font" class="font-mono">Code</code></body>');
+  await page.setContent(html);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#body-font')!).fontFamily.includes('Arial'));
+  assert.match(await page.locator('#heading-font').evaluate(el=>getComputedStyle(el).fontFamily), /Arial/);
+  assert.match(await page.locator('#code-font').evaluate(el=>getComputedStyle(el).fontFamily), /Courier New/);
+  await page.evaluate(() => document.documentElement.style.setProperty('--font-sans','Verdana, sans-serif'));
+  assert.match(await page.locator('#body-font').evaluate(el=>getComputedStyle(el).fontFamily), /Verdana/);
+  assert.match(await page.locator('#heading-font').evaluate(el=>getComputedStyle(el).fontFamily), /Verdana/);
+  await page.evaluate(() => { document.documentElement.style.removeProperty('--font-sans'); document.documentElement.classList.add('dark'); });
+  assert.match(await page.locator('#body-font').evaluate(el=>getComputedStyle(el).fontFamily), /Georgia/);
+  assert.match(await page.locator('#heading-font').evaluate(el=>getComputedStyle(el).fontFamily), /Georgia/);
+});
+
+test('library preview compiles actual custom variants and preserves project globals', async t=>{
+  const browser=await chromium.launch({headless:true}); t.after(()=>browser.close());
+  const page=await browser.newPage();
+  const html=libraryPreviewHtml({file:'/source.css',vars:{},projectCss:'@custom-variant project-active (&[data-active="yes"]); @utility project-width { width:37px; } .source-probe { font-size:23px; } @layer base { body { font-family:Georgia, serif; background:rgb(10,20,30); color:rgb(40,50,60); } }'},[])
+    .replace('</body>','<div id="source-probe" class="source-probe project-width project-active:opacity-50" data-active="yes">Actual CSS</div></body>');
+  await page.setContent(html);
+  await page.waitForFunction(()=>getComputedStyle(document.querySelector('#source-probe')!).width==='37px');
+  assert.deepEqual(await page.locator('#source-probe').evaluate(el=>({opacity:getComputedStyle(el).opacity,fontSize:getComputedStyle(el).fontSize})),{opacity:'0.5',fontSize:'23px'});
+  assert.deepEqual(await page.locator('body').evaluate(el=>({font:getComputedStyle(el).fontFamily,background:getComputedStyle(el).backgroundColor,color:getComputedStyle(el).color})),{font:'Georgia, serif',background:'rgb(10, 20, 30)',color:'rgb(40, 50, 60)'});
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -106,7 +106,7 @@ test('Studio distributes its own installable Canon runtime from a local URL', as
     writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: 'download-consumer', private: true }));
     const installed = spawnSync('npm', [
       'install', '--save-dev', '--ignore-scripts', '--no-audit', '--no-fund',
-      '--registry', 'http://127.0.0.1:1', `${f.url}/canon-package.tgz`,
+      '--registry', 'https://registry.npmjs.org', '--prefer-offline', `${f.url}/canon-package.tgz`,
     ], { cwd: consumer, encoding: 'utf8', timeout: 60_000 });
     assert.equal(installed.status, 0, installed.stderr || installed.stdout);
     const cli = join(consumer, 'node_modules', '.bin', 'canon');
@@ -125,8 +125,8 @@ test('Studio distributes its own installable Canon runtime from a local URL', as
     const metadata = JSON.parse(readFileSync(join(runtime, 'package.json'), 'utf8'));
     assert.equal(metadata.devDependencies, undefined);
     assert.equal(metadata.scripts, undefined, 'the archive must not carry lifecycle hooks');
-    assert.deepEqual(metadata.dependencies ?? {}, {});
-    assert.deepEqual(readdirSync(runtime).sort(), ['LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'bin', 'lib', 'package.json']);
+    assert.deepEqual(metadata.dependencies, { esbuild: '0.28.2' });
+    assert.deepEqual(readdirSync(runtime).sort(), ['LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'assets', 'bin', 'lib', 'package.json']);
     assert.match(readFileSync(join(runtime, 'LICENSE'), 'utf8'), /MIT License/);
     assert.match(readFileSync(join(runtime, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /Lucide/);
     assert.match(metadata.repository.url, /github\.com/);
@@ -151,7 +151,44 @@ test('Studio distributes its own installable Canon runtime from a local URL', as
     assert.deepEqual(readdirSync(f.scratch), []);
   });
 
-  await t.test('the connection procedure can retain the package and reinstall without Studio or registry access', async () => {
+  await t.test('the downloaded package adopts a shadcn project and starts Library Studio', async () => {
+    const consumer = join(f.root, 'consumer app with spaces');
+    const library = join(f.root, 'library app');
+    cpSync(new URL('./fixtures/shadcn-app/', import.meta.url), library, { recursive: true });
+    writeFileSync(join(library, 'package.json'), JSON.stringify({ name: 'library-consumer', private: true }));
+    const cli = join(consumer, 'node_modules', '.bin', 'canon');
+    const original = readFileSync(join(library, 'src/ui/button.tsx'), 'utf8');
+    const adopted = spawnSync(process.execPath, [cli, 'adopt', '--apply', '--no-hooks'], { cwd: library, encoding: 'utf8', timeout: 30_000 });
+    assert.equal(adopted.status, 0, adopted.stderr || adopted.stdout);
+    assert.equal(readFileSync(join(library, 'src/ui/button.tsx'), 'utf8'), original);
+    assert.ok(existsSync(join(library, 'AGENTS.md')));
+    const child = spawn(process.execPath, [cli, 'studio', '--port', '0'], { cwd: library, stdio: ['ignore', 'pipe', 'pipe'] });
+    let logs = '';
+    child.stderr.on('data', data => { logs += data; });
+    try {
+      const address = await new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Library Studio did not start: ${logs}`)), 10_000);
+        child.stdout.on('data', data => {
+          logs += data;
+          const match = logs.match(/http:\/\/127\.0\.0\.1:\d+\//);
+          if (match) { clearTimeout(timer); resolve(match[0]); }
+        });
+        child.once('exit', () => { clearTimeout(timer); reject(new Error(`Library Studio exited: ${logs}`)); });
+      });
+      const state = await (await fetch(new URL('api/lib/state', address))).json();
+      assert.ok(state.components.some((c: { slug: string }) => c.slug === 'button'));
+      assert.equal(state.canReset, true);
+      assert.match(await (await fetch(address)).text(), /app\.js/);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit');
+        child.kill();
+        await exited;
+      }
+    }
+  });
+
+  await t.test('the connection procedure retains the package and reinstalls offline with cached compiler dependencies', async () => {
     const consumer = join(f.root, 'portable app');
     mkdirSync(join(consumer, '.canon'), { recursive: true });
     writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: 'portable-consumer', private: true }));
@@ -164,7 +201,7 @@ test('Studio distributes its own installable Canon runtime from a local URL', as
     assert.ok(lock.includes('file:.canon/canon-ds.tgz'));
     assert.ok(!lock.includes(f.url), 'the project must not retain a localhost dependency');
     rmSync(join(consumer, 'node_modules'), { recursive: true, force: true });
-    const reinstall = spawnSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--offline', '--cache', join(consumer, 'empty-cache')], { cwd: consumer, encoding: 'utf8', timeout: 30_000 });
+    const reinstall = spawnSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--offline'], { cwd: consumer, encoding: 'utf8', timeout: 30_000 });
     assert.equal(reinstall.status, 0, reinstall.stderr || reinstall.stdout);
     assert.ok(existsSync(join(consumer, 'node_modules', '.bin', 'canon')));
   });

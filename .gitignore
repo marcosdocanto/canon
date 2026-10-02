@@ -11,3 +11,9 @@ examples/*/design/dist
 .env
 .env.*
 !.env.example
+.evidence/
+
+/src/lib-editor/app.js
+/src/lib-editor/app.js.LEGAL.txt
+/src/lib-editor/app.css
+/src/lib-editor/bundled-licenses.txt

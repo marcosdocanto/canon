@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readConfig } from '../src/adapters/shadcn/config.ts';
@@ -144,4 +144,71 @@ test('writeTheme splices inside @layer base preserving everything else', (t) => 
   const again = writeTheme(root, readTheme(root));
   installFiles(root, again);
   assert.equal(readFileSync(file, 'utf8'), css);
+});
+
+test('font mappings round-trip in @theme with quoted stacks and no duplicate root declarations', t => {
+  const root = clone(t), file = join(root, 'app/globals.css');
+  const original = readFileSync(file, 'utf8') + '\n@theme inline {\n  --font-sans: "Original Font", sans-serif;\n  --font-heading: var(--font-sans);\n  --font-mono: ui-monospace, monospace;\n}\n';
+  writeFileSync(file, original);
+  const theme = readTheme(root);
+  assert.equal(theme.vars['font-sans'].light, '"Original Font", sans-serif');
+  assert.equal(writeTheme(root, theme)[0].content.toString(), original);
+  theme.vars['font-sans'].light = '"New Font", system-ui, sans-serif';
+  const expected = original.replace('"Original Font", sans-serif', '"New Font", system-ui, sans-serif');
+  installFiles(root, writeTheme(root, theme));
+  assert.equal(readFileSync(file, 'utf8'), expected);
+  assert.equal(readTheme(root).vars['font-sans'].light, '"New Font", system-ui, sans-serif');
+  assert.equal(writeTheme(root, readTheme(root))[0].content.toString(), expected);
+  theme.vars['font-sans'].light = 'serif;}body{color:red';
+  assert.throws(() => writeTheme(root, theme), /disallowed character/);
+  assert.equal(readFileSync(file, 'utf8'), expected);
+});
+
+test('root and dark font values remain authoritative over utility mappings', t => {
+  const root = clone(t), file = join(root, 'app/globals.css');
+  const original = readFileSync(file, 'utf8') + '\n:root { --font-sans: Arial; }\n.dark { --font-sans: Georgia; }\n@theme inline { --font-sans: var(--font-sans); }\n';
+  writeFileSync(file, original);
+  const theme = readTheme(root);
+  assert.deepEqual(theme.vars['font-sans'], { light: 'Arial', dark: 'Georgia' });
+  theme.vars['font-sans'] = { light: 'Verdana', dark: 'serif' };
+  installFiles(root, writeTheme(root, theme));
+  const css = readFileSync(file, 'utf8');
+  assert.match(css, /@theme inline \{ --font-sans: var\(--font-sans\); \}/);
+  assert.deepEqual(readTheme(root).vars['font-sans'], { light: 'Verdana', dark: 'serif' });
+});
+
+test('preview CSS retains actual imported variants, keyframes and global styles without leaking managed values', t => {
+  const root=clone(t), file=join(root,'app/globals.css');
+  writeFileSync(join(root,'app/shared.css'),'@custom-variant project-active (&[data-active="yes"]);\n@theme inline { @keyframes project-spin { from { transform:rotate(0deg) } to { transform:rotate(360deg) } } }\n.project-source { font-weight: 321; }\n');
+  writeFileSync(file,readFileSync(file,'utf8')+'\n@import "./shared.css";\n:root { color-scheme:light; }\n@layer utilities { .project-utility { letter-spacing:.03em; } }\n');
+  const theme=readTheme(root);
+  assert.match(theme.projectCss!,/@custom-variant project-active/);
+  assert.match(theme.projectCss!,/@keyframes project-spin/);
+  assert.match(theme.projectCss!,/font-weight: 321/);
+  assert.match(theme.projectCss!,/color-scheme:light/);
+  assert.match(theme.projectCss!,/letter-spacing:.03em/);
+  assert.doesNotMatch(theme.projectCss!,/--primary:\s*oklch/);
+  assert.doesNotMatch(theme.projectCss!,/@import/);
+  assert.doesNotMatch(theme.projectCss!,/@custom-variant data-open/,'a library that does not import shadcn styles gets no Canon substitute');
+});
+
+test('unsupported CSS sources are surfaced and comment imports are not followed', t=>{
+  const root=clone(t),file=join(root,'app/globals.css');
+  writeFileSync(file,readFileSync(file,'utf8')+'\n/* @import "comment-only.css"; */\n@import "./missing.css";\n@import "https://example.test/fonts.css";\n');
+  const theme=readTheme(root);
+  assert.ok(theme.previewWarnings!.some(warning=>warning.includes('missing.css')));
+  assert.ok(theme.previewWarnings!.some(warning=>warning.includes('example.test')));
+  assert.ok(!theme.previewWarnings!.some(warning=>warning.includes('comment-only')));
+});
+
+
+test('CSS package imports honor style-only exports',t=>{
+  const root=clone(t),file=join(root,'app/globals.css'),pkg=join(root,'node_modules/project-style');
+  mkdirSync(pkg,{recursive:true});
+  writeFileSync(join(pkg,'package.json'),JSON.stringify({name:'project-style',exports:{'.':{style:'./actual.css'}}}));
+  writeFileSync(join(pkg,'actual.css'),'@utility actual-project { opacity:.75; }');
+  writeFileSync(file,readFileSync(file,'utf8')+'\n@import "project-style";');
+  const theme=readTheme(root);
+  assert.match(theme.projectCss!,/@utility actual-project/);
+  assert.ok(!theme.previewWarnings!.some(warning=>warning.includes('project-style')));
 });

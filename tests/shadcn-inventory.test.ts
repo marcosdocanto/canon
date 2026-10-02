@@ -207,37 +207,58 @@ test('a digit-leading variant value like "2xl" is safe and does not force read-o
   assert.deepEqual(Object.keys(scale.cva!.variants.size), ['sm', '2xl']);
 });
 
-test('a part literal containing a quote (legit Tailwind arbitrary-value syntax) is downgraded to read-only at inventory time, not shown falsely editable', (t) => {
-  // Read/write grammar asymmetry (review finding): `parseParts` is RIGHT to resolve
-  // `after:content-['']` as a real static literal — it's legitimate Tailwind — but `writePart`'s
-  // own grammar (`SAFE_CLASS_LIST`) forbids every quote character, so splicing it back would 422
-  // even for an UNCHANGED resend. `inventory()` must catch this itself so nothing is ever shown
-  // editable that can't actually be saved.
+test('SelectTrigger allows a radius edit while preserving source selector quotes and rejecting new opaque tokens', (t) => {
   const root = clone(t);
-  writeFileSync(join(root, 'src/ui/quote-part.tsx'), [
-    'function QuoteLiteral({ className }: { className?: string }) {',
-    '  return <div className={cn("after:content-[\'\']", className)} />',
-    '}',
-    'export { QuoteLiteral }',
-  ].join('\n'));
+  const selector = "[&_svg:not([class*='size-'])]:size-4";
+  const file = join(root,'src/ui/select.tsx');
+  const source = `export function SelectTrigger({className}) { return <button className={cn("rounded-md ${selector}",className)} /> }`;
+  writeFileSync(file,source);
+  const info=inventory(root).find(c=>c.slug==='select')!;
+  const part=info.parts!.find(p=>p.name==='SelectTrigger')!;
+  assert.ok(part.span);
+  assert.equal(part.readOnlyReason,undefined);
+  const write=writePart(info,'SelectTrigger',`rounded-none ${selector}`);
+  assert.equal(write.content.toString(),source.replace('rounded-md','rounded-none'));
+  assert.equal(readFileSync(file,'utf8'),source);
+  assert.throws(()=>writePart(info,'SelectTrigger',`rounded-none ${selector} after:content-['new']`),/unsafe class string/);
+  assert.throws(()=>writePart(info,'SelectTrigger','rounded-none ";alert(1);//'),/unsafe class string/);
+  const forged={...info,parts:[{...part,classes:"after:content-['new']"}]};
+  assert.throws(()=>writePart(forged,'SelectTrigger',"after:content-['new']"),/unsafe class string/);
+  writeFileSync(file,source.replace(selector,'block'));
+  assert.throws(()=>writePart(info,'SelectTrigger',`rounded-none ${selector}`),/unsafe class string/);
+});
 
-  const quotePart = inventory(root).find((i) => i.slug === 'quote-part')!;
-  const part = quotePart.parts!.find((p) => p.name === 'QuoteLiteral')!;
-  assert.equal(part.classes, "after:content-['']", 'the literal is still shown (display), unchanged');
-  assert.equal(part.dynamicTail, 'className', 'other PartInfo fields survive the downgrade');
-  assert.equal(part.span, undefined, 'span (the write-eligibility field) is dropped');
-  assert.equal(part.readOnlyReason, 'contains characters the editor cannot write back (quotes)');
+test('writeVariants preserves opaque source selectors while saving a safe base edit and rejects new opaque tokens', (t) => {
+  const root = clone(t);
+  const file = join(root, 'src/ui/button.tsx');
+  const selector = "[&_svg:not([class*='size-'])]:size-4";
+  writeFileSync(file, readFileSync(file, 'utf8').replace('inline-flex items-center', `${selector} inline-flex items-center`));
+  const button = inventory(root).find((component) => component.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.base = spec.base.map((value) => value.replace('rounded-md', 'rounded-full'));
+  const write = writeVariants(button, spec);
+  assert.match(write.content.toString(), /rounded-full/);
+  assert.ok(write.content.toString().includes(selector));
+  spec.base.push("[&_svg:not([class*='new-'])]:size-8");
+  assert.throws(() => writeVariants(button, spec), /unsafe class string/);
+});
 
-  // writePart refuses it as read-only — even for an otherwise-perfectly-safe replacement value —
-  // because the part has no `span` to splice into, not because of anything wrong with what's being
-  // written this time.
-  const before = readFileSync(quotePart.file, 'utf8');
-  assert.throws(() => writePart(quotePart, 'QuoteLiteral', 'block'), /"quote-part"'s part "QuoteLiteral" is read-only \(contains characters the editor cannot write back \(quotes\)\)/);
-  assert.equal(readFileSync(quotePart.file, 'utf8'), before, 'a refused writePart call must never touch the file');
+test('opaque selector preservation trusts fresh source, never client-supplied component metadata or a different scope', (t) => {
+  const root = clone(t);
+  const button = inventory(root).find((component) => component.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.base.push("after:content-['new']");
+  assert.throws(() => writeVariants({ ...button, cva: spec }, spec), /unsafe class string/);
+});
 
-  // And resending the EXACT SAME (unwritable) literal, unchanged, throws too — just for the OTHER
-  // reason (writePart's own `validateClassList` rejects the incoming value before it ever reaches
-  // the read-only check): either way, nothing is ever written.
-  assert.throws(() => writePart(quotePart, 'QuoteLiteral', "after:content-['']"), /unsafe class string/);
-  assert.equal(readFileSync(quotePart.file, 'utf8'), before, 'a refused writePart call must never touch the file');
+test('writeVariants preserves empty variant class strings while editing another property', (t) => {
+  const root = clone(t);
+  const file = join(root,'src/ui/button.tsx');
+  writeFileSync(file, readFileSync(file,'utf8').replace('bg-primary text-primary-foreground shadow hover:bg-primary/90', ''));
+  const button = inventory(root).find(c => c.slug === 'button')!;
+  const spec = structuredClone(button.cva!);
+  spec.base.push('rounded-none');
+  const written = writeVariants(button,spec);
+  assert.match(written.content.toString(),/rounded-none/);
+  assert.match(written.content.toString(),/default:\s*""/);
 });

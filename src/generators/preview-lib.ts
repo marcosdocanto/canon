@@ -6,6 +6,7 @@
 // `RenderExample[]`). The ONLY file this module reads is Canon's own vendored asset
 // (`assets/tailwind-play.js`, the @tailwindcss/browser runtime) — never a repo file.
 import { readFileSync } from 'node:fs';
+import { cn } from '../vendor/cn-0.4.0/index.js';
 import type { ComponentInfo, CvaSpec, LibraryTheme, PartInfo, RenderExample } from '../adapters/types.ts';
 
 /** Pinned version of the vendored @tailwindcss/browser runtime in assets/tailwind-play.js. Keep in sync when bumping the asset. */
@@ -49,7 +50,7 @@ export function classesFor(cva: CvaSpec, picks: Record<string, string | boolean>
     if (applies) classes.push(...matchClasses);
   }
 
-  return classes.join(' ');
+  return cn(classes.join(' '));
 }
 
 /** The HTML tag a preview should render a component's root as, chosen pragmatically per slug. */
@@ -108,7 +109,7 @@ function exampleMarkup(info: ComponentInfo, example: RenderExample): string {
   const tag = htmlTagFor(info.slug);
   const classAttr = classes ? ` class="${escapeHtml(classes)}"` : '';
   const otherAttrs = Object.entries(extraAttrs).map(([key, value]) => ` ${escapeHtml(key)}="${escapeHtml(value)}"`).join('');
-  const openTag = `<${tag}${classAttr}${otherAttrs}`;
+  const openTag = `<${tag} data-inspect="${escapeHtml(info.slug)}" data-picks="${escapeHtml(JSON.stringify({ ...info.cva?.defaultVariants, ...picks }))}"${classAttr}${otherAttrs}`;
   const body = VOID_TAGS.has(tag) ? ' />' : `>${escapeHtml(parsed.text)}</${tag}>`;
 
   return `<figure class="cn-lib-example" data-title="${escapeHtml(example.title)}"><figcaption>${escapeHtml(example.title)}</figcaption>${openTag}${body}</figure>`;
@@ -238,7 +239,7 @@ function composedMarkup(componentName: string, parts: PartInfo[]): string | unde
   const consumedNames = [root.name, ...[...byRole.values()].map((p) => p.name)];
 
   const div = (part: PartInfo, text: string, children = '') =>
-    `<div data-slot="${escapeHtml(slotNameOf(part.name))}" class="${escapeHtml(part.classes!)}">${children || escapeHtml(text)}</div>`;
+    `<div data-part="${escapeHtml(part.name)}" data-slot="${escapeHtml(slotNameOf(part.name))}" class="${escapeHtml(part.classes!)}">${children || escapeHtml(text)}</div>`;
 
   const header = byRole.get('Header');
   const headerChildren = [byRole.get('Title'), byRole.get('Description'), byRole.get('Action')]
@@ -379,12 +380,16 @@ function unstyledSection(infos: ComponentInfo[]): string {
  * Both name and value are HTML-escaped: this text lands inside a `<style>` element, and a
  * hostile or merely malformed theme value (e.g. one containing `</style><script>`) must never be
  * able to break out of it. Legitimate CSS values (oklch(...), hex, rem, hsl triplets) contain
- * none of `&<>"'` and so round-trip byte-identical.
+ * none of `&<>"'` and so round-trip byte-identical. Font stacks preserve quotes
+ * and instead escape angle brackets as CSS escapes.
  */
+const fontFamilyName = (name: string): boolean => /^font-(?!weight(?:-|$))[A-Za-z0-9-]+$/.test(name);
+// Quotes are valid in font stacks; style elements do not decode HTML entities.
+const fontCssValue = (value: string): string => value.replace(/</g, "\\3c ").replace(/>/g, "\\3e ");
 function varLines(theme: LibraryTheme, key: 'light' | 'dark'): string {
   return Object.entries(theme.vars)
     .filter(([, value]) => value[key] !== undefined)
-    .map(([name, value]) => `  --${escapeHtml(name)}: ${escapeHtml(value[key]!)};`)
+    .map(([name, value]) => `  --${escapeHtml(name)}: ${fontFamilyName(name) ? fontCssValue(value[key]!) : escapeHtml(value[key]!)};`)
     .join('\n');
 }
 
@@ -420,12 +425,14 @@ const CARD_CONTAINMENT_CSS = `position: relative;
   transform: translateZ(0);
   min-height: 3rem;`;
 
+const PREVIEW_BODY_APPEARANCE = `  background: var(--background, #fff);
+  color: var(--foreground, #111);
+  font-family: var(--font-sans, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);`;
+
 const STRUCTURAL_CSS = `html, body { margin: 0; }
 body {
   min-height: 100%;
-  background: var(--background, #fff);
-  color: var(--foreground, #111);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+${PREVIEW_BODY_APPEARANCE}
   padding: 24px;
   display: grid;
   gap: 16px;
@@ -581,16 +588,83 @@ body {
  * the user's actual edited theme — not a Canon-styled wrapper around it — is this preview's whole
  * purpose.
  */
-export function previewHtml(theme: LibraryTheme, components: { info: ComponentInfo; examples: RenderExample[] }[]): string {
+export type PreviewPage = 'components' | 'dashboard' | 'settings';
+
+/** Page layout is illustrative; every installed primitive uses the inventory's shared styles. */
+function pageMarkup(components: { info: ComponentInfo }[], page: Exclude<PreviewPage, 'components'>): string {
+  const inventory = new Map(components.map(({ info }) => [info.slug, info]));
+  const primitive = (slug: string, content: string, options: { part?: string; variant?: string; tag?: string; attrs?: string } = {}) => {
+    const info = inventory.get(slug);
+    const part = info?.parts?.find((p) => p.name === (options.part ?? info.exportName));
+    const picks: Record<string, string | boolean> = {};
+    if (options.variant && info?.cva?.variants.variant?.[options.variant]) picks.variant = options.variant;
+    const classes = options.part ? part?.classes : info?.cva ? classesFor(info.cva, picks) : part?.classes;
+    const editable = info && (classes !== undefined);
+    const tag = options.tag ?? htmlTagFor(slug);
+    const resolved = { ...info?.cva?.defaultVariants, ...picks };
+    const variantAttrs = Object.entries(resolved).filter(([name]) => /^[a-z][a-z0-9-]*$/i.test(name)).map(([name, value]) => ` data-${name}="${escapeHtml(String(value))}"`).join('');
+    const attrs = editable ? ` data-inspect="${escapeHtml(slug)}"${part && (!info.cva || options.part) ? ` data-part="${escapeHtml(part.name)}"` : ` data-picks="${escapeHtml(JSON.stringify({ ...info.cva?.defaultVariants, ...picks }))}"`} class="${escapeHtml(classes!)}"` : ' class="cn-page-fallback"';
+    const child = part?.previewChild;
+    if (editable && child?.tag === tag && /^(div|span|section)$/.test(child.wrapperTag)) {
+      return `<${child.wrapperTag}${attrs}${variantAttrs} data-slot="${escapeHtml(slotNameOf(part.name))}-container"><${tag} class="${escapeHtml(child.classes)}" data-slot="${escapeHtml(slotNameOf(part.name))}">${VOID_TAGS.has(tag) ? '' : `${content}</${tag}>`}</${child.wrapperTag}>`;
+    }
+    return `<${tag}${attrs}${variantAttrs}${part ? ` data-slot="${escapeHtml(slotNameOf(part.name))}"` : ''}${options.attrs ?? ''}>${VOID_TAGS.has(tag) ? '' : `${content}</${tag}>`}`;
+  };
+  const button = (label: string, variant?: string) => primitive('button', escapeHtml(label), { variant, attrs: ' type="button"' });
+  const card = (title: string, description: string, content: string, footer = '') => primitive('card',
+    primitive('card', primitive('card', escapeHtml(title), { part: 'CardTitle', tag: 'h2' }) + primitive('card', escapeHtml(description), { part: 'CardDescription', tag: 'p' }), { part: 'CardHeader' }) +
+    primitive('card', content, { part: 'CardContent' }) + (footer ? primitive('card', footer, { part: 'CardFooter' }) : ''));
+  const input = (label: string, value: string) => `<label class="cn-page-field">${primitive('label', escapeHtml(label), { tag: 'span' })}${primitive('input', '', { attrs: ` aria-label="${escapeHtml(label)}" value="${escapeHtml(value)}"` })}</label>`;
+  const header = `<header class="cn-page-header"><div><p class="cn-page-eyebrow">Workspace / ${page === 'dashboard' ? 'Overview' : 'Settings'}</p><h1>${page === 'dashboard' ? 'Overview' : 'Workspace settings'}</h1><p class="cn-page-muted">${page === 'dashboard' ? 'All your projects in one shared workspace.' : 'Manage your profile and workspace preferences.'}</p></div><div class="cn-page-actions">${button('Invite member', 'outline')}${button('New project')}</div></header>`;
+  const tablePart = (part: string, tag: string, content: string) => primitive('table', content, { part, tag });
+  const rows = ['Website refresh', 'Mobile onboarding', 'Design system', 'Customer research', 'Brand guidelines'].map((name, i) => tablePart('TableRow', 'tr',
+    tablePart('TableCell', 'td', `<strong>${name}</strong><br><span class="cn-page-muted">Updated ${i + 1} hours ago</span>`) +
+    tablePart('TableCell', 'td', primitive('badge', i === 2 ? 'Review' : 'In progress')) +
+    tablePart('TableCell', 'td', `Team ${i + 1}`) +
+    tablePart('TableCell', 'td', button('View project', 'outline')))).join('');
+  const table = tablePart('Table', 'table', tablePart('TableHeader', 'thead', tablePart('TableRow', 'tr', ['Project', 'Status', 'Owner', ''].map((name) => tablePart('TableHead', 'th', name)).join(''))) + tablePart('TableBody', 'tbody', rows));
+  const overview = `<div class="cn-page-toolbar">${input('Find a project', '')}${button('Filter', 'outline')}</div><div class="cn-page-table">${table}</div><footer class="cn-page-actions"><span class="cn-page-muted">5 projects in your workspace</span>${button('Browse all projects', 'outline')}</footer>`;
+  const settings = `<section class="cn-page-settings">${card('Profile', 'Your public workspace details.', `<div class="cn-page-form">${input('Full name', 'Alex Morgan')}${input('Email address', 'alex@example.com')}</div>`, `<div class="cn-page-actions">${button('Cancel', 'outline')}${button('Save profile')}</div>`)}${card('Workspace', 'Details shared with your team.', `<div class="cn-page-form">${input('Workspace name', 'Acme Studio')}${input('Website', 'acme.example')}</div>`, button('Save workspace'))}${card('Delete workspace', 'This example shows the destructive button variant.', '<p>Workspace removal is permanent.</p>', button('Delete workspace', 'destructive'))}</section>`;
+  return `<main data-page="${page}" class="cn-page">${header}${page === 'dashboard' ? overview : settings}<footer class="cn-page-muted cn-page-footer">Example page · shared component styles · click an element to inspect</footer></main>`;
+}
+
+const PAGE_CSS = `
+body:has(.cn-page) { max-width: 1280px; padding: 32px; }
+.cn-page { display: grid; gap: 24px; min-width: 0; }
+.cn-page-header { display:flex; justify-content:space-between; align-items:center; gap:20px; }
+.cn-page h1 { font-size:28px; font-weight:650; letter-spacing:-.035em; margin:4px 0 8px; }
+.cn-page-eyebrow,.cn-page-muted { font-size:13px; color:${CHROME_MUTED}; }
+.cn-page-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.cn-page-toolbar { display:flex; align-items:end; justify-content:space-between; gap:16px; }
+.cn-page-toolbar .cn-page-field { width: min(320px, 100%); }
+.cn-page-table { overflow:auto; }
+.cn-page table { width:100%; border-collapse:collapse; }
+.cn-page th.cn-page-fallback,.cn-page td.cn-page-fallback { padding:18px 8px; text-align:left; border-bottom:1px solid ${CHROME_BORDER}; font-size:13px; }
+.cn-page-form { display:grid; gap:18px; }
+.cn-page-field { display:grid; gap:7px; font-size:13px; }
+.cn-page-settings { display:grid; gap:24px; max-width:760px; }
+.cn-page-fallback { padding:8px 0; }
+.cn-page-footer { text-align:center; padding:12px 0; }
+[data-inspect] { cursor:pointer; }
+@media(max-width:700px) { body:has(.cn-page){padding:20px;} .cn-page-header{align-items:flex-start;flex-direction:column;} }
+`;
+
+export function previewHtml(theme: LibraryTheme, components: { info: ComponentInfo; examples: RenderExample[] }[], page: PreviewPage = 'components'): string {
   const rootVars = varLines(theme, 'light');
   const darkVars = varLines(theme, 'dark');
   // Var names are also escaped defensively: upstream (readTheme) constrains them to
   // [A-Za-z0-9-]+, but this module must not rely on a caller it doesn't control for CSS-context
   // safety — the same `<style>`-breakout hole applies to names as to values.
-  const themeBridge = Object.keys(theme.vars).map((name) => `  --color-${escapeHtml(name)}: var(--${escapeHtml(name)});`).join('\n');
+  const themeBridge = theme.projectCss !== undefined ? '' : Object.keys(theme.vars).filter((name) => name !== 'radius' && !name.startsWith('font-')).map((name) => `  --color-${escapeHtml(name)}: var(--${escapeHtml(name)});`).join('\n');
+  const fontNames = Object.keys(theme.vars).filter(fontFamilyName);
+  const fontAliases = fontNames.map(name => `  --canon-preview-${name}: var(--${name});`).join('\n');
+  const utilityRoot = Object.entries(theme.utilityTheme ?? {}).filter(([name]) => !fontNames.includes(name)).map(([name, value]) => `  --${escapeHtml(name)}: ${fontFamilyName(name) ? fontCssValue(value) : escapeHtml(value)};`).join('\n');
+  // Distinct aliases avoid self-referential custom properties while keeping Tailwind
+  // inline font utilities bound to the live draft, including existing @theme mappings.
+  const utilityBridge = [utilityRoot, ...fontNames.map(name => `  --${name}: var(--canon-preview-${name});`)].join('\n');
   // Fallback bridge lines for the semantic names above a trimmed theme never defined — skipped
   // entirely for any name the project's own theme already has (that one's real line is above).
-  const fallbackBridge = Object.entries(SEMANTIC_FALLBACKS)
+  const fallbackBridge = theme.projectCss !== undefined ? '' : Object.entries(SEMANTIC_FALLBACKS)
     .filter(([name]) => !(name in theme.vars))
     .map(([name, fallback]) => `  --color-${name}: ${fallback};`)
     .join('\n');
@@ -606,21 +680,28 @@ export function previewHtml(theme: LibraryTheme, components: { info: ComponentIn
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+${(theme.previewWarnings?.length || (theme.tailwindVersion && theme.tailwindVersion !== TAILWIND_RUNTIME_VERSION)) ? `<meta name="canon-preview-warnings" content="${escapeHtml([...(theme.previewWarnings ?? []), ...(theme.tailwindVersion && theme.tailwindVersion !== TAILWIND_RUNTIME_VERSION ? [`Project Tailwind ${theme.tailwindVersion}; preview runtime ${TAILWIND_RUNTIME_VERSION}. Styles may differ.`] : [])].join(' ' ))}">` : ''}
 <title>Canon library preview</title>
 <style type="text/tailwindcss">
+${(theme.projectCss ?? theme.baseCss ?? '').replace(/<(?=\/?(?:style|script)\b)/gi, '\\3c ')}
 @theme inline {
 ${themeBridge}
 ${fallbackBridge}
+${utilityBridge}
 }
+
 </style>
 <style>
 :root {
 ${rootVars}
+${utilityRoot}
+${fontAliases}
 }
 ${darkVars ? `.dark {\n${darkVars}\n}` : ''}
 </style>
 <style>
-${STRUCTURAL_CSS}
+${theme.projectCss !== undefined ? STRUCTURAL_CSS.replace(PREVIEW_BODY_APPEARANCE, '') : STRUCTURAL_CSS}
+${PAGE_CSS}
 </style>
 <!-- canon:tailwind-runtime @tailwindcss/browser@${TAILWIND_RUNTIME_VERSION} -->
 <script>
@@ -628,8 +709,7 @@ ${TAILWIND_RUNTIME}
 </script>
 </head>
 <body>
-${sections}
-${unstyled}
+${page === 'components' ? sections + '\n' + unstyled : pageMarkup(components, page)}
 </body>
 </html>
 `;

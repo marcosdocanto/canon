@@ -84,7 +84,8 @@ test('install() preserves this root\'s own recorded adapter, but never inherits 
   nestedSystem.patterns = [];
   writeDesignDir(nestedSystem, nestedDesign);
   await buildSystem(nestedSystem, nestedDesign);
-  install(nestedSystem, nestedDesign, { root: nestedRoot, hooks: false });
+  const nativeLog = install(nestedSystem, nestedDesign, { root: nestedRoot, hooks: false }).log.join("\n");
+  assert.match(nativeLog, /Import the CSS once/);
   assert.equal(findProject(nestedRoot)?.adapter, undefined, "must not inherit the unrelated ancestor's adapter");
 
   // A project WITH its own already-recorded adapter must keep it across a plain install() call —
@@ -98,6 +99,8 @@ test('install() preserves this root\'s own recorded adapter, but never inherits 
   ownSystem.patterns = [];
   writeDesignDir(ownSystem, ownDesign);
   await buildSystem(ownSystem, ownDesign);
-  install(ownSystem, ownDesign, { root: ownRoot, hooks: false });
+  const libraryLog = install(ownSystem, ownDesign, { root: ownRoot, hooks: false }).log.join("\n");
+  assert.match(libraryLog, /existing theme CSS/);
+  assert.doesNotMatch(libraryLog, /tailwind\.theme\.css|design\/dist\/os\.css/);
   assert.equal(findProject(ownRoot)?.adapter, 'shadcn', "must keep this root's own recorded adapter");
 });

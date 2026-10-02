@@ -2,11 +2,15 @@
 
 The public repository is [`marcosdocanto/canon`](https://github.com/marcosdocanto/canon). The npm package is `canon-ds`; its CLI is `canon`. Maintainers use Node.js 24 from [`.nvmrc`](../.nvmrc), while consumers can use Node.js 22.18 or newer. [`package.json`](../package.json) owns the version; `src/version.ts` reads it directly.
 
+## Release 0.2 product transition
+
+Use [CHANGELOG.md](../CHANGELOG.md) and [the migration guide](MIGRATION-0.2.md) as the release notes. Confirm the README, package description, public homepage and GitHub About text all describe the design harness, including installed libraries, agent instructions, MCP, Studio and validation. The package and executable names remain unchanged. Validate the packed CLI against a disposable shadcn app before publishing. A local build, a deployed Pages site and an npm release are separate states; report each explicitly. Prepare release-version documentation in the tagged source. Only report npm publication and website deployment as complete after verifying each service.
+
 ## One-time hosting setup
 
 In the repository's **Settings → Pages**, choose **GitHub Actions** as the source. The [`CI workflow`](../.github/workflows/ci.yml) tests Node 22.18 and 24, runs Chromium checks, builds `site/` and uploads the Pages artifact. Only successful pushes or manual runs on this repository's `main` branch deploy to the `github-pages` environment. Pull requests build and test without deploying. If environment rules restrict deployments, allow `main`. See [GitHub's Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
-The expected catalog URL is [marcosdocanto.github.io/canon](https://marcosdocanto.github.io/canon/). It serves a static catalog and downloadable package archive; editable Studio runs locally in each project. The site build uses generated sample data and needs no private credentials or personal design directory.
+The expected project website URL is [marcosdocanto.github.io/canon](https://marcosdocanto.github.io/canon/). It serves the project homepage, library guide, native catalog, and downloadable package archive; editable Studio runs locally in each project. The site build uses generated sample data and needs no private credentials or personal design directory.
 
 ## Check a release locally
 
@@ -35,7 +39,7 @@ npm publish --ignore-scripts --access public
 
 Confirm `npm whoami` shows the account that should own the package before publishing. The final command publishes the checked version; package versions cannot be replaced. `--ignore-scripts` avoids rerunning lifecycle hooks because tests, the build and release checks have already completed. A local first publication does not carry GitHub Actions provenance. See [npm's publishing documentation](https://docs.npmjs.com/cli/v11/commands/npm-publish/) and [provenance requirements](https://docs.npmjs.com/generating-provenance-statements/).
 
-For the initial `0.1.0` release, tag the exact published commit as `v0.1.0` and push that tag after publication succeeds. Do not dispatch the publish workflow for a version already on npm.
+For a first release, tag the exact published commit as `vX.Y.Z`, matching the version in `package.json`, and push that tag after publication succeeds. Do not dispatch the publish workflow for a version already on npm.
 
 ## Configure npm trusted publishing
 
