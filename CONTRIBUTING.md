@@ -1,6 +1,6 @@
 # Contributing to Canon
 
-Canon helps people build applications with coding agents using shared design tokens, components, page patterns and focused instructions. Contributions can improve the catalog, accessibility, generated output, Studio, agent integrations, tests or documentation.
+Canon is a design harness for coding agents, connecting the installed library to managed instructions, design references, MCP, visual editing and validation. The current library adapter supports shadcn/ui. Contributions can improve source editing, preview fidelity, accessibility, adapters, agent integrations and documentation. The native generated catalog remains a separate supported workflow.
 
 For a small fix, open a focused pull request. For a new API, integration or substantial catalog addition, describe the application use case in an issue first so the proposed scope is easy to review. Agent-assisted contributions are welcome; the contributor is responsible for understanding and verifying the result.
 
@@ -26,12 +26,16 @@ On Linux, Playwright may also need system libraries; use `npx playwright install
 | `node --test tests/engine.test.ts` | Run one test file while changing that area. |
 | `npm run build` | Compile the distributable runtime into `lib/`. |
 
-The checkout CLI runs current source with `node bin/canon.js`; it does not require a global installation. `npm run build` compiles Canon itself. `node bin/canon.js build --design <path>` generates a design's CSS, references and previews.
+The `npm ci` prepare step builds the offline React/shadcn Library Studio assets. After changing `studio/`, run `npm run build:studio` (the test and package build commands also rebuild them). The checkout CLI runs current source with `node bin/canon.js`; it does not require a global installation. `npm run build` compiles Canon itself. `node bin/canon.js build --design <path>` generates a design's CSS, references and previews.
 
 ## Find the right source
 
 | Location | Responsibility |
 | --- | --- |
+| `studio/`, `src/serve-lib.ts` | Library Studio controls, draft lifecycle and source saves. |
+| `src/adapters/shadcn/` | Inventory, theme parsing and supported component source edits. |
+| `src/generators/react-preview.ts`, `src/generators/story-catalog.ts` | Real React previews and example compositions. |
+| `src/public-site/` | Public homepage and library documentation. |
 | [`src/types.ts`](src/types.ts) | Component, pattern, token and design schemas. |
 | [`src/tokens/`](src/tokens/) | Token generation, presets and seed handling; shared token logic is in `base.js`. |
 | [`src/components/`](src/components/) | Component specifications and shared style fragments. See [Authoring components](docs/AUTHORING.md). |
@@ -45,7 +49,11 @@ The checkout CLI runs current source with `node bin/canon.js`; it does not requi
 
 Edit the source that owns the behavior. `lib/` and a design's `dist/` are generated output. A project's `design/components/*.json` and `design/patterns/*.json` are copies of the catalog created at initialization; changing them does not change the repository catalog.
 
-## Preview in a temporary workspace
+## Verify the library workflow
+
+Use a disposable framework app with shadcn/ui installed. Run `node /absolute/path/to/canon/bin/canon.js adopt --apply` from that app, then run the same CLI with `studio --port 0 --open`. Verify a draft edit, Save, the resulting source diff, and the real application. Check light/dark, desktop/mobile and interaction/inspection. Keep preview styles faithful to installed source and preserve unrelated code. Never use a customer project as a test fixture.
+
+## Preview the native catalog in a temporary workspace
 
 Use a new generated design for contribution work. Never use a personal or customer design as a fixture. These commands are for a POSIX shell, run from the repository root:
 

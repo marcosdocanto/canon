@@ -1,13 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSystem, writeDesignDir } from '../src/system.ts';
 import { buildSystem } from '../src/build.ts';
 import { install } from '../src/install.ts';
+import { findProject, projectWrite } from '../src/project.ts';
+import { installFiles } from '../src/design-files.ts';
 
 test('install handles quoted paths, migrates its legacy hook and preserves unrelated hooks', async (t) => {
   const temporary = mkdtempSync(join(tmpdir(), 'canon install test-'));
@@ -62,4 +64,43 @@ test('install handles quoted paths, migrates its legacy hook and preserves unrel
   assert.ok(instructions.includes(JSON.stringify(`./${relDesign}/generated/web/tailwind.theme.css`)));
   assert.ok(instructions.includes('DESIGN.compact.md'));
   assert.doesNotMatch(instructions, /\/dist\//);
+});
+
+test('install() preserves this root\'s own recorded adapter, but never inherits an unrelated ancestor project\'s', async (t) => {
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'canon install adapter-')));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+
+  // The ancestor directory happens to be an unrelated adapter-mode Canon project.
+  mkdirSync(join(parent, 'design'), { recursive: true });
+  installFiles(parent, [projectWrite(parent, join(parent, 'design'), 'shadcn')]);
+
+  // A nested project with no `.canon/project.json` of its own must not inherit that adapter just
+  // because `findProject` walks up to find one.
+  const nestedRoot = join(parent, 'apps', 'plain-app');
+  const nestedDesign = join(nestedRoot, 'design');
+  mkdirSync(nestedRoot, { recursive: true });
+  const nestedSystem = await createSystem({ name: 'Plain nested app', prefix: 'pn' });
+  nestedSystem.components = nestedSystem.components.filter((c) => c.slug === 'button');
+  nestedSystem.patterns = [];
+  writeDesignDir(nestedSystem, nestedDesign);
+  await buildSystem(nestedSystem, nestedDesign);
+  const nativeLog = install(nestedSystem, nestedDesign, { root: nestedRoot, hooks: false }).log.join("\n");
+  assert.match(nativeLog, /Import the CSS once/);
+  assert.equal(findProject(nestedRoot)?.adapter, undefined, "must not inherit the unrelated ancestor's adapter");
+
+  // A project WITH its own already-recorded adapter must keep it across a plain install() call —
+  // the fix must not throw the baby out with the bathwater.
+  const ownRoot = join(parent, 'apps', 'shadcn-app');
+  const ownDesign = join(ownRoot, 'design');
+  mkdirSync(ownRoot, { recursive: true });
+  installFiles(ownRoot, [projectWrite(ownRoot, ownDesign, 'shadcn')]);
+  const ownSystem = await createSystem({ name: 'Own shadcn app', prefix: 'os' });
+  ownSystem.components = ownSystem.components.filter((c) => c.slug === 'button');
+  ownSystem.patterns = [];
+  writeDesignDir(ownSystem, ownDesign);
+  await buildSystem(ownSystem, ownDesign);
+  const libraryLog = install(ownSystem, ownDesign, { root: ownRoot, hooks: false }).log.join("\n");
+  assert.match(libraryLog, /existing theme CSS/);
+  assert.doesNotMatch(libraryLog, /tailwind\.theme\.css|design\/dist\/os\.css/);
+  assert.equal(findProject(ownRoot)?.adapter, 'shadcn', "must keep this root's own recorded adapter");
 });

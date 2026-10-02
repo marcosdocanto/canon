@@ -3,7 +3,7 @@ import { join, relative, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { System } from './types.ts';
 import { installFiles, sourcePath, type Write } from './design-files.ts';
-import { projectWrite } from './project.ts';
+import { findLocalProject, projectWrite } from './project.ts';
 
 export interface InstallOptions { root: string; hooks: boolean }
 
@@ -55,7 +55,12 @@ export function install(system: System, designDir: string, opts: InstallOptions)
   const relDesign = relative(root, designDir) || 'design';
   log.push(`Installing ${system.meta.name} into ${root}`);
   const references = referenceWrites(system, designDir, root, dist);
-  installFiles(root, [...references, projectWrite(root, designDir)]);
+  // Preserve an already-recorded adapter (e.g. set by `canon adopt`/`init --lib`): this call
+  // otherwise has no way to know about library mode and would silently drop it. Only a config
+  // recorded at `root` itself counts — an ancestor project's adapter must never leak into a
+  // nested root that has no config of its own.
+  const adapter = findLocalProject(root)?.adapter;
+  installFiles(root, [...references, projectWrite(root, designDir, adapter)]);
   for (const write of references) log.push(`  wrote ${write.path}`);
   mergeJson(join(root, '.mcp.json'), (j) => {
     const servers = ((j.mcpServers as Record<string, unknown>) ??= {});
@@ -89,7 +94,11 @@ export function install(system: System, designDir: string, opts: InstallOptions)
   log.push('');
   log.push('Next:');
   const relDist = relative(root, dist).split(sep).join('/');
+  if (adapter) {
+    log.push('  1. Keep using your installed library components and existing theme CSS. Library mode edits those shared files; no generated Canon CSS import is needed.');
+  } else {
   log.push(`  1. Import the CSS once: \`import ${JSON.stringify(`./${relDist}/${system.meta.prefix}.css`)}\` (or <link>). Tailwind v4: also @import ${JSON.stringify(`./${relDist}/tailwind.theme.css`)}.`);
+  }
   log.push(`  2. Open the gallery: canon serve --design ${shellQuote(relDesign)}`);
   log.push(`  3. Agents start with DESIGN.compact.md + AGENTS.md/CLAUDE.md and retrieve relevant specs through Canon MCP or design source. Run \`canon check --design ${shellQuote(relDesign)}\` in CI.`);
   return { log };

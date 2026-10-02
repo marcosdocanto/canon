@@ -21,9 +21,11 @@ try {
   const index = indexTokens(system.tokens, system.meta.prefix);
   const fonts = fontsLink(system.tokens.font.family.sans + ' ' + system.tokens.font.family.mono + ' ' + system.tokens.font.family.display);
   const docs = documentationHtml(system, index, fonts, { publicSite: true });
-  writeFileSync(join(temporary, 'index.html'), docs);
-  writeFileSync(join(temporary, 'docs.html'), docs);
-  writeFileSync(join(temporary, 'preview.html'), previewHtml(system, index, { publicSite: true }));
+  writeFileSync(join(temporary, 'native-docs.html'), docs);
+  for (const name of ['index.html', 'docs.html', 'public.css', 'public.js', 'favicon.svg']) {
+    copyFileSync(join(root, 'src/public-site', name), join(temporary, name));
+  }
+  writeFileSync(join(temporary, 'preview.html'), previewHtml(system, index, { publicSite: true }).replaceAll('./docs.html', './native-docs.html'));
   const publicInstructions = `# Public Canon release ${pkg.version}\n\nThis is Canon's public catalog. Import its default design, then open the user's project Studio to customize it. The public website does not store visitors' edits.\n\nFor the CLI, prefer the public npm package \`${pkg.name}@${pkg.version}\` when that exact version is available: \`npm install --save-dev ${pkg.name}@${pkg.version}\` (or the project's package manager). If the registry version is not yet available, use the retained archive in step 2 below. The archive is served beside this document, so connection also works without registry access.\n\n`;
   writeFileSync(join(temporary, 'CONNECT.md'), publicInstructions + readFileSync(join(root, 'src/generators/connection.md'), 'utf8'));
   mkdirSync(join(temporary, 'api'));

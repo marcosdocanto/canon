@@ -57,7 +57,7 @@ async function prepareArchive(): Promise<Buffer> {
       catch { throw new Error('Preparing a Canon checkout download requires its TypeScript development dependency. Install the Canon checkout dependencies first.'); }
       await mkdir(join(workspace, 'node_modules'), { recursive: true });
       await symlink(compiler, join(workspace, 'node_modules', 'typescript'), 'junction');
-      await run(process.execPath, [join(workspace, 'scripts', 'build.mjs')], workspace, temporary, 'Canon runtime compilation');
+      await run(process.execPath, [join(workspace, 'scripts', 'build.mjs'), '--runtime-only'], workspace, temporary, 'Canon runtime compilation');
       runtime = join(workspace, 'lib');
     }
 
@@ -65,6 +65,7 @@ async function prepareArchive(): Promise<Buffer> {
     await mkdir(join(staging, 'bin'), { recursive: true });
     await copyRuntime(join(packageRoot, 'bin', 'canon.js'), join(staging, 'bin', 'canon.js'));
     await copyRuntime(runtime, join(staging, 'lib'));
+    await copyRuntime(join(packageRoot, 'assets'), join(staging, 'assets'));
     await copyRuntime(join(packageRoot, 'README.md'), join(staging, 'README.md'));
     for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
       await copyRuntime(join(packageRoot, name), join(staging, name));
@@ -77,7 +78,7 @@ async function prepareArchive(): Promise<Buffer> {
     // An explicit staging tree excludes the served design, caller's project, dev
     // dependencies, lifecycle hooks, npm configuration and checkout-only files.
     metadata.bin = { canon: 'bin/canon.js' };
-    metadata.files = ['bin', 'lib', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'];
+    metadata.files = ['bin', 'lib', 'assets', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'];
     await writeFile(join(staging, 'package.json'), JSON.stringify(metadata, null, 2) + '\n');
     const userConfig = join(temporary, 'user.npmrc');
     const globalConfig = join(temporary, 'global.npmrc');
