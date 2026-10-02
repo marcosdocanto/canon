@@ -10,18 +10,18 @@ import { OWNERSHIP_RULE } from './designmd-lib.ts';
 const code = (s: string) => `\`${s}\``;
 
 /**
- * Semantic Tailwind classes derived from the theme's own CSS variables — never a static list, so
- * a project with different variable names (or extra ones like `chart-1`, `sidebar-*`) gets its own
- * accurate set. `radius` isn't a color and is skipped; a `*-foreground` variable is a text color;
- * `border`/`input` are border colors; `ring` is a ring color; everything else is a fill.
+ * Examples from explicit Tailwind color mappings. A :root variable is not proof of a utility:
+ * --font-sans is not bg-font-sans, and --primary may be mapped to --color-action. If the adapter
+ * cannot read a mapping (for example a v3 JS config), omit examples rather than invent them.
  */
 export function semanticClasses(theme: LibraryTheme): string[] {
   const classes: string[] = [];
-  for (const name of Object.keys(theme.vars).sort()) {
-    if (name === 'radius') continue;
+  for (const key of Object.keys(theme.utilityTheme ?? {}).sort()) {
+    const name = /^color-([a-zA-Z0-9][\w-]*)$/.exec(key)?.[1];
+    if (!name || /^(initial|inherit|unset|revert(?:-layer)?)$/i.test(theme.utilityTheme![key].trim())) continue;
     if (name === 'foreground' || name.endsWith('-foreground')) classes.push(`text-${name}`);
-    else if (name === 'border' || name === 'input') classes.push(`border-${name}`);
-    else if (name === 'ring') classes.push(`ring-${name}`);
+    else if (name === 'border' || name === 'input' || name.endsWith('-border')) classes.push(`border-${name}`);
+    else if (name === 'ring' || name.endsWith('-ring')) classes.push(`ring-${name}`);
     else classes.push(`bg-${name}`);
   }
   return classes;
@@ -37,7 +37,7 @@ This project's UI components live in the repository's own code, not in a Canon-a
 1. **Use the existing components, at their real paths.** Import from the path shown by the component index (for example ${firstImport ? code(firstImport) : 'the path in DESIGN.md'}). Never hand-author a component that duplicates one already tracked here.
 2. **Use existing variants only.** Choose from the variant axes and values already defined on each component (see the index and DESIGN.md); don't invent a new variant, size or class combination by hand.
 3. **Extend variants through Canon.** To add a variant, a size, or change a default, use Canon (Studio or the ${code('canon')} CLI) so the change is parsed, validated and regenerated consistently — never hand-edit a \`cva()\` call or the theme file's CSS variables.
-4. **Semantic Tailwind classes only.** Use the classes generated from this project's theme variables${classes.length ? `: ${classes.map(code).join(', ')}` : ''}. Never use a raw palette class (${code('bg-blue-500')}) or an arbitrary value (${code('bg-[#1a1a1a]')}) for anything the theme already covers.
+4. **Semantic Tailwind classes only.** ${classes.length ? `Use the project's declared Tailwind color mappings, for example: ${classes.map(code).join(', ')}.` : 'Use the semantic utilities configured by this project; inspect its Tailwind configuration and installed components for the actual names.'} A CSS variable alone does not declare a utility. Never use a raw palette class (${code('bg-blue-500')}) or an arbitrary value (${code('bg-[#1a1a1a]')}) for anything the theme already covers.
 5. **Missing component.** If a component isn't in the index, run ${code('canon add <slug>')} to install it through the adapter — it delegates to the library's own installer. Don't hand-roll a replacement.
 6. **Build the finished thing, not a sketch.** Every screen ships as a demonstration of the real product, never a static mockup: controls do what they say (search filters, forms validate and create, selects change state), records open in their detail surface (drawer/dialog), and derived numbers recompute from the data on screen. Include loading, empty, error and hover/focus states. Use the library's composed blocks at full fidelity — icons on actions and metadata, avatars for people, badges for status, real formatted values (currency, dates) and plausible domain fixtures clearly separated from verified facts. No dead buttons, no lorem ipsum, no bare unstyled fragments.
 7. **Compose by surface type.** Work tools (kanban, large tables, inboxes, cockpits) take the full viewport width with padding and an app shell (sidebar or top nav from the library's own blocks); contained centered layouts are for content and forms only. One primary action per region. Check each library block's provider requirements (sidebar/tooltip/toast need their providers at the root) before using it.

@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inventory } from '../src/adapters/shadcn/inventory.ts';
@@ -9,6 +11,29 @@ import { installFiles } from '../src/design-files.ts';
 import { GENERATED_MARK, ensureStorybook, storyWrites } from '../src/generators/stories.ts';
 import { exclusionReason } from '../src/generators/story-catalog.ts';
 import { clone } from './fixtures/clone.ts';
+
+test('generated stories typecheck in an app without Storybook, including the Sonner theme union', (t) => {
+  const root = clone(t);
+  symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(root, 'node_modules'), 'dir');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { sonner: '2.0.0' } }));
+  writeFileSync(join(root, 'src/ui/sonner.tsx'), `export function Toaster(props: { theme?: 'light' | 'dark' | 'system'; position?: 'bottom-right' }) { return <div data-theme={props.theme} />; }`);
+  writeFileSync(join(root, 'sonner-api.d.ts'), `declare function toast(message: string, options?: {description?: string}): void; declare namespace toast { const success: typeof toast; const error: typeof toast; } export { toast };`);
+  const components = inventory(root).filter(c => c.slug === 'sonner');
+  assert.equal(components.length, 1);
+  const writes = storyWrites(root, shadcnAdapter, components);
+  installFiles(root, writes);
+  const program = ts.createProgram(writes.map(w => w.path), {
+    noEmit: true, strict: true, skipLibCheck: true, esModuleInterop: true,
+    jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    target: ts.ScriptTarget.ES2022, baseUrl: root,
+    paths: { '~/*': ['src/*'], sonner: ['sonner-api.d.ts'] },
+  });
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  assert.equal(diagnostics.length, 0, ts.formatDiagnostics(diagnostics, {
+    getCurrentDirectory: () => root, getCanonicalFileName: f => f, getNewLine: () => '\n',
+  }));
+});
 
 test('storyWrites generates a marked story per component, one element per render example', (t) => {
   const root = clone(t);

@@ -1,6 +1,6 @@
 {
   "name": "canon-ds",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Design harness for coding agents: connect your component library, generate AGENTS.md and design context, edit shared styles in Studio, and check for drift.",
   "homepage": "https://marcosdocanto.github.io/canon/",
   "repository": {

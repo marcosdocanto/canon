@@ -43,7 +43,7 @@ The skill guides the agent through setup, library adoption, MCP context, impleme
 
 The entry skill is separate from the generated project-specific `design-system` skill. Installing `canon-ds` alone does not install the entry skill into an agent. The npm package also includes it at `skills/canon`; after installing the package, use `npx skills add ./node_modules/canon-ds/skills/canon --skill canon` to install that exact packaged copy.
 
-This guide covers **Canon 0.2.1**. See the [migration guide](docs/MIGRATION-0.2.md) when updating an existing project. Manual setup is available below.
+This guide covers **Canon 0.2.2**. See the [migration guide](docs/MIGRATION-0.2.md) when updating an existing project. Manual setup is available below.
 
 ## Library Studio
 

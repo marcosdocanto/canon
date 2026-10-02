@@ -2,6 +2,10 @@
 
 Version 0.2 connects installed component libraries to the full Canon design harness: generated agent instructions, design references, MCP, Library Studio and supported checks. The package remains `canon-ds`, the executable remains `canon`, and native projects keep their existing design source.
 
+## Updating from 0.2.1
+
+Update `canon-ds` to 0.2.2 or newer, run `npx canon sync`, and restart Studio and the agent’s Canon MCP process. Generated color utility examples now follow the actual Tailwind color aliases; typography and dimensions are no longer advertised as background colors. Configurations without readable color mappings retain guidance to inspect the installed components and Tailwind configuration. Your component source and theme are preserved. Sync also regenerates the marked Canon stories so application builds no longer require Storybook to be installed.
+
 ## Updating from 0.2.0
 
 Update `canon-ds` to 0.2.1 or newer with your package manager, run `npx canon sync`, then restart the agent’s Canon MCP process and Studio. Library MCP now reads the real installed component inventory and theme on each request. Do not initialize or adopt again to upgrade.
