@@ -24,6 +24,8 @@ For local prototypes, implement the agreed scope with clearly identified fixture
 
 ## Install or reuse Canon
 
+Use the CLI from the same Canon distribution as this skill when available. Resolve this skill directory's real path (including symlinks) and check for `../../bin/canon.js` relative to it. If present, invoke that absolute file with Node for all Canon commands below. This keeps a development-checkout skill paired with its development CLI instead of accidentally running an older npm release. If the skill is a standalone installed copy, use the target project's installed Canon CLI and check that its help lists the required commands.
+
 Check Node and the installed Canon version. Use the project's package manager and local CLI. Install `canon-ds` as a development dependency when missing; use a version exposing the required harness commands. For an unreleased development checkout, invoke its absolute `bin/canon.js` path with Node; do not claim npm latest includes unpublished commands. `--save-dev` / `-D` keeps Canon in development tooling; the deployed application consumes its own component source and theme.
 
 The following examples use npm. Translate them to the existing package manager and run from the **target application root**. Quote paths containing spaces.
