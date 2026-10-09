@@ -19,9 +19,9 @@ function managedContent(path: string, block: string) {
 }
 
 /** Prepare references from a build without writing; Save uses its staged build. */
-export function referenceWrites(system: System, designDir: string, root: string, dist = join(designDir, system.meta.out || 'dist')): Write[] {
+export function referenceWrites(system: System, designDir: string, root: string, dist = join(designDir, system.meta.out || 'dist'), staged: Write[] = []): Write[] {
   const relDesign = relative(root, designDir).split(sep).join('/') || '.';
-  const text = (file: string) => readFileSync(join(dist, file), 'utf8').replace(/\bdesign\//g, () => `${relDesign}/`);
+  const text = (file: string) => (staged.find(write => write.path === join(dist, file))?.content.toString('utf8') ?? readFileSync(join(dist, file), 'utf8')).replace(/\bdesign\//g, () => `${relDesign}/`);
   const files = new Map<string, string>([
     ['DESIGN.md', 'DESIGN.md'], ['DESIGN.compact.md', 'DESIGN.compact.md'],
     ['.claude/skills/design-system/SKILL.md', 'agents/SKILL.md'],

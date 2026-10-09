@@ -7,19 +7,13 @@ import { sourcePath } from './design-files.ts';
 import { loadDesignDir } from './system.ts';
 import { agentsLibBlock } from './generators/agents-lib.ts';
 import { designmdLib } from './generators/designmd-lib.ts';
-import { lintSource, type Known } from './lint.ts';
-import { distance, parseCssColor, oklchToHex } from './color.js';
+import { lintSource } from './lint.ts';
+import { libraryColor as color, libraryTokens, knownFromLibrary } from './library-context.ts';
+import { distance } from './color.js';
 
 type Json = Record<string, unknown>;
 const text = (value: string) => ({ content: [{ type: 'text', text: value }] });
 const json = (value: unknown) => text(JSON.stringify(value, null, 2));
-
-function color(value: string): string | null {
-  const parsed = parseCssColor(value);
-  if (parsed) return parsed;
-  const m = value.match(/^oklch\(\s*([\d.]+)(%)?\s+([\d.]+)\s+([\d.]+)\s*\)$/i);
-  return m ? oklchToHex({ L: +m[1] / (m[2] ? 100 : 1), C: +m[3], H: +m[4] }) : null;
-}
 
 export function libraryMcp(designDir: string, root: string) {
   const canonical = realpathSync(designDir);
@@ -30,11 +24,7 @@ export function libraryMcp(designDir: string, root: string) {
     const system = loadDesignDir(canonical);
     const theme = adapter.readTheme(project.root);
     const components = adapter.inventory(project.root);
-    const variables: Record<string, { light: string; dark?: string }> = { ...Object.fromEntries(Object.entries(theme.utilityTheme ?? {}).map(([name, light]) => [name.replace(/^--/, ''), { light }])), ...theme.vars };
-    const tokens = Object.entries(variables).map(([name, value]) => ({
-      name, cssVar: `--${name}`, ...value,
-      group: /^font-/.test(name) ? 'font' : /^text-/.test(name) ? 'type' : /^radius/.test(name) ? 'radius' : /^spacing/.test(name) ? 'space' : /^shadow/.test(name) ? 'shadow' : color(value.light) || adapter.describeVar(name) || /^(chart-|sidebar|color-)/.test(name) ? 'color' : 'other',
-    }));
+    const tokens = libraryTokens(theme, adapter);
     const themeCss = () => readFileSync(sourcePath(project.root, theme.file, 'file'), 'utf8');
     return { system, theme, components, tokens, themeCss };
   };
@@ -70,13 +60,7 @@ export function libraryMcp(designDir: string, root: string) {
         }
         case 'list_patterns': case 'get_pattern': return text('Application patterns are not inventoried by this library adapter. Compose the installed components; no Canon-native patterns apply.');
         case 'lint_code': {
-          const known: Known = { classes: new Set(), props: new Map(), colors: [], dims: [], prefix: system.meta.prefix };
-          for (const token of tokens) {
-            const hex = color(token.light);
-            if (hex) known.colors.push({ name: token.name, hex, ref: token.cssVar });
-            const length = token.light.match(/^([\d.]+)(px|rem)$/);
-            if (length) known.dims.push({ ref: token.cssVar, px: +length[1] * (length[2] === 'rem' ? 16 : 1), group: token.group });
-          }
+          const known = knownFromLibrary(theme, adapter, system.meta.prefix);
           const violations = lintSource(known, String(args.filename ?? 'snippet.tsx'), String(args.code), { tailwind: system.meta.lint.tailwind, native: false });
           return json({ scope: 'Static raw-style and Tailwind checks against declared project tokens; does not validate React props or runtime behavior.', violations });
         }

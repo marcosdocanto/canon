@@ -9,6 +9,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getAdapter } from './adapters/index.ts';
 import type { Adapter, ComponentInfo, CvaSpec, LibraryTheme, PartInfo } from './adapters/types.ts';
 import { HttpError, installFiles, record, requireValue, type Write } from './design-files.ts';
+import { referenceWrites } from './install.ts';
+import { loadDesignDir } from './system.ts';
 import { buildLibWrites } from './build-lib.ts';
 import { libraryReset } from './reset-lib.ts';
 import { realComponentPreview } from './generators/react-preview.ts';
@@ -475,8 +477,9 @@ async function handleSave(req: IncomingMessage, res: ServerResponse, root: strin
       if (write) writes.push(write);
     }
 
-    writes.push(...await buildLibWrites(root, designDir, { theme: body.theme ?? currentTheme, components: nextComponents }));
+    writes.push(...await buildLibWrites(root, designDir, { theme: body.theme ?? currentTheme, components: nextComponents, sourceWrites: writes }));
 
+    writes.push(...referenceWrites(loadDesignDir(designDir), designDir, root, undefined, writes));
     installFiles(root, writes);
     // The save already committed at this point — installFiles either applied every write or rolled
     // all of them back, atomically. Re-reading fresh state off disk is a courtesy for the response
