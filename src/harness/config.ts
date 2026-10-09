@@ -55,10 +55,14 @@ export function validateHarnessConfig(value: unknown): HarnessConfig {
   });
   unique(checks.map(v => v.id), 'checks');
   if (c.app !== undefined) {
-    const app = object(c.app, 'app', ['url', 'start', 'readyTimeoutMs']); text(app.url, 'app.url');
+    const app = object(c.app, 'app', ['url', 'start', 'readyTimeoutMs', 'storageState']); text(app.url, 'app.url');
     let url: URL; try { url = new URL(app.url); } catch { fail('app.url', 'must be an absolute http(s) URL'); }
     if (!['http:', 'https:'].includes(url!.protocol) || url!.username || url!.password) fail('app.url', 'must be an http(s) URL without credentials');
     if (app.start !== undefined) argv(app.start, 'app.start');
+    if (app.storageState !== undefined) {
+      text(app.storageState, 'app.storageState');
+      try { rootedPath('/project', app.storageState); } catch { fail('app.storageState', 'must remain inside the project'); }
+    }
     if (app.readyTimeoutMs !== undefined) positive(app.readyTimeoutMs, 'app.readyTimeoutMs', 600_000);
   }
   const scenarios = list(c.scenarios, 'scenarios');
@@ -109,6 +113,10 @@ export async function doctorHarness(start: string): Promise<HarnessDoctor> {
       try { const full = await checkedPath(loaded.root, path); if (!(await stat(full)).isFile()) throw new Error('must be a file'); await access(full); }
       catch (error) { result.errors.push(`context.${kind}: ${path}: ${(error as Error).message}`); }
     }
+    if (loaded.config.app?.storageState) {
+      try { await storageStatePath(loaded.root, loaded.config.app.storageState); }
+      catch (error) { result.errors.push(`app.storageState: ${(error as Error).message}`); }
+    }
     for (const check of loaded.config.checks) if (check.cwd) {
       try { if (!(await stat(await checkedPath(loaded.root, check.cwd))).isDirectory()) throw new Error('must be a directory'); }
       catch (error) { result.errors.push(`checks.${check.id}.cwd: ${(error as Error).message}`); }
@@ -117,4 +125,12 @@ export async function doctorHarness(start: string): Promise<HarnessDoctor> {
     result.ok = result.errors.length === 0;
   } catch (error) { result.errors.push((error as Error).message); }
   return result;
+}
+
+/** Resolve a local session file without reading or returning authentication contents. */
+export async function storageStatePath(root: string, path: string): Promise<string> {
+  const full = await checkedPath(root, path);
+  if (!(await stat(full)).isFile()) throw new Error(`${path} must be a file`);
+  await access(full);
+  return full;
 }

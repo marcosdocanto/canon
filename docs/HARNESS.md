@@ -70,7 +70,7 @@ Canon does not guess application routes, a development port or a start command. 
 }
 ```
 
-Use only real files, commands and routes belonging to your application. Documents and skills are paths to files relative to the project root. IDs and viewport names use letters, numbers, underscores or hyphens. Commands are argument arrays, run without an implicit shell. A check's `cwd` stays inside the project. `app` is optional when there are no scenarios; `app.start`, `readySelector` and `colorScheme` are optional. Every configured check and scenario is attempted; the completion lists identify the evidence required for readiness. At least one requirement is necessary.
+Use only real files, commands and routes belonging to your application. Documents and skills are paths to files relative to the project root. IDs and viewport names use letters, numbers, underscores or hyphens. Commands are argument arrays, run without an implicit shell. A check's `cwd` stays inside the project. `app` is optional when there are no scenarios; `app.start`, `app.storageState`, `readySelector` and `colorScheme` are optional. Every configured check and scenario is attempted; the completion lists identify the evidence required for readiness. At least one requirement is necessary.
 
 The harness reads the policy and references; it does not interpret prose into executable checks. It does not invoke a model, implement a change, or retry a repair loop. Your agent follows the project's skills and fixes failures within the task's authorization, then reruns verification.
 
@@ -87,9 +87,28 @@ Canon resolves the target project's installation first. A source checkout can fa
 
 Configured checks run before browser capture. `app.start` manages the server for captures only; a check that needs a running server must manage that lifecycle itself or use an already running server. Verification then probes `app.url`. Any HTTP response establishes an existing server, which is reused and left running; an HTTP error fails the relevant scenario without starting a competing process. Each capture records its URL and whether its server was external or managed by Canon. Otherwise, the optional `app.start` process is started, awaited and stopped by Canon when capture ends. Without a start command, an unreachable application fails capture. On POSIX systems the owned process group is stopped; Windows cleanup is limited to the direct child process.
 
-Each route and viewport uses an isolated browser context. Capture waits for page load, the optional visible selector and font readiness, bounded by `app.readyTimeoutMs` (30 seconds by default). It uses the configured light/dark color scheme, reduced motion, UTC and English locale, and disables screenshot animations. A navigation failure, HTTP error, uncaught page error, missing selector or browser failure produces failed evidence. Review screenshots for application errors that return HTTP 200 without throwing. Authentication, scripted user interactions, seeded data and visual baselines are not configured by this schema; run your saved Playwright tests as checks for those flows.
+Each route and viewport uses an isolated browser context. Capture waits for page load, the optional visible selector and font readiness, bounded by `app.readyTimeoutMs` (30 seconds by default). It uses the configured light/dark color scheme, reduced motion, UTC and English locale, and disables screenshot animations. A navigation failure, HTTP error, uncaught page error, missing selector or browser failure produces failed evidence. Review screenshots for application errors that return HTTP 200 without throwing. Scripted user interactions, seeded data and visual baselines are not configured by this schema; run your saved Playwright tests as checks for those flows. Authenticated captures can reuse a saved session as described below.
 
 Screenshots demonstrate only that configured pages were captured. They are not visual regression verdicts, accessibility audits or proof that user interactions work. Supply dedicated project checks for those requirements. External services and a reused running server are not cryptographically tied to local source.
+
+## Authenticated captures
+
+Set `app.storageState` to an existing Playwright storage-state JSON file relative to the project root:
+
+```json
+{
+  "app": {
+    "url": "http://localhost:3000",
+    "storageState": ".canon/auth/vera.json"
+  }
+}
+```
+
+Have the project's own login fixture or saved Playwright tests create and refresh that file, for example with `await context.storageState({ path: '.canon/auth/vera.json' })`. Generate or refresh it before running `canon verify`; rewriting the session during verification changes its inputs and invalidates that run. Canon does not sign in, create accounts or refresh sessions. The file must remain within the project, including after symlink resolution. Doctor checks that it exists and is a file. Each route/viewport starts in a separate context loaded from the saved state; session changes in one capture are not written back or shared with another.
+
+Keep session files local and Git-ignored, for example by adding `/.canon/auth/` to the project's `.gitignore`. They can contain cookies and other credentials. Canon records the configured path and a content hash, not session contents, in its reports. Refreshing or changing the state invalidates existing evidence even when the file is ignored by Git. Screenshots can still contain private application data; review them before sharing.
+
+Sessions can expire or be revoked without the file changing. Use a scenario `readySelector` that is visible only after authentication, such as `[data-authenticated-dashboard]`, and include that scenario in `completion.requiredScenarios`. A generic selector such as `main` can also match the login screen and does not prove authentication. Run verification again to exercise the current session; reading an old report only checks local evidence freshness.
 
 ## Execute and read evidence
 
@@ -104,7 +123,7 @@ npx canon report <run-id> --format html
 
 Runs are stored under `.canon/runs/<run-id>/`, with JSON, Markdown, HTML, command output, screenshots and an artifact hash manifest. `report` defaults to the latest run and revalidates it against current source, configuration and artifact bytes. A source/configuration change, removed or modified artifact, or missing required result prevents readiness. Rerun `verify` after a commit: the recorded Git revision is part of the source identity. Verification also checks for source changes during execution.
 
-In Git projects, source identity includes tracked files and nonignored untracked files, plus configured context and configuration. Ignored application inputs and external state are outside this coverage unless referenced as context. Without Git, common generated directories are excluded from the filesystem snapshot. Hashes catch accidental edits; local reports are not signed attestations against a malicious writer.
+In Git projects, source identity includes tracked files and nonignored untracked files, plus configured context, configuration and the optional storage-state file. Ignored application inputs and external state are outside this coverage unless referenced as context or storage state. Without Git, common generated directories are excluded from the filesystem snapshot. Hashes catch accidental edits; local reports are not signed attestations against a malicious writer.
 
 | State | Meaning |
 | --- | --- |

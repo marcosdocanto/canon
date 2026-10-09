@@ -26,7 +26,8 @@ export async function snapshotSource(root: string, config: HarnessConfig): Promi
     paths = result.stdout.split('\0').filter(Boolean);
     try { revision = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim(); } catch { /* Unborn Git repository. */ }
   } catch { paths = await fallback(root); }
-  paths.push('canon.config.json', ...config.context.documents, ...config.context.skills);
+  const configuredFiles = ['canon.config.json', ...config.context.documents, ...config.context.skills, ...(config.app?.storageState ? [config.app.storageState] : [])];
+  paths.push(...configuredFiles);
   const files: Record<string, string> = {};
   for (const path of [...new Set(paths)].filter(p => !runtime(p)).sort()) {
     const full = resolve(root, path); const rel = relative(root, full);
@@ -44,8 +45,8 @@ export async function snapshotSource(root: string, config: HarnessConfig): Promi
       else throw error;
     }
   }
-  // Configured context is relevant even when Git ignores a symlink's target.
-  for (const path of ['canon.config.json', ...config.context.documents, ...config.context.skills]) {
+  // Configured context and session bytes matter even when Git ignores a symlink's target.
+  for (const path of configuredFiles) {
     try {
       const full = await checkedPath(root, path);
       files[path] = `${files[path] ?? ''}:content:${hash(await readFile(full))}`;

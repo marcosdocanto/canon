@@ -3,7 +3,7 @@ export interface HarnessConfig {
   schemaVersion: 1;
   context: { documents: string[]; skills: string[] };
   checks: HarnessCheck[];
-  app?: { url: string; start?: string[]; readyTimeoutMs?: number };
+  app?: { url: string; start?: string[]; readyTimeoutMs?: number; storageState?: string };
   scenarios: HarnessScenario[];
   completion: { requiredChecks: string[]; requiredScenarios: string[] };
 }

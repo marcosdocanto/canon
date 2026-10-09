@@ -233,3 +233,48 @@ test('report discovery cannot borrow a parent run across a nested project bounda
   await mkdir(join(root, 'child')); await writeFile(join(root, 'child', 'package.json'), '{}');
   await assert.rejects(reports.readHarnessReport(join(root, 'child')), /No .*found/);
 });
+
+test('app.storageState validates a project-relative file and doctor reports missing or escaping state', async t => {
+  const { symlink } = await import('node:fs/promises');
+  const config: any = base(); config.app = { url: 'http://localhost:3000', storageState: '.canon/auth/session.json' };
+  const root = await fixture(t, config);
+  assert.equal((await configApi.loadHarnessConfig(root)).config.app?.storageState, '.canon/auth/session.json');
+  const missing = await configApi.doctorHarness(root);
+  assert.equal(missing.ok, false); assert.match(missing.errors.join(' '), /app.storageState.*session.json/);
+  await mkdir(join(root, '.canon/auth'), { recursive: true });
+  await writeFile(join(root, '.canon/auth/session.json'), JSON.stringify({ cookies: [], origins: [] }));
+  assert.equal((await configApi.doctorHarness(root)).ok, true);
+  for (const path of ['../outside.json', join(root, 'absolute.json'), '', { cookies: [] }]) {
+    await writeFile(join(root, 'canon.config.json'), JSON.stringify({ ...config, app: { ...config.app, storageState: path } }));
+    await assert.rejects(configApi.loadHarnessConfig(root), /storageState/);
+  }
+  await writeFile(join(root, 'canon.config.json'), JSON.stringify(config));
+  await rm(join(root, '.canon/auth/session.json'));
+  const outside = await fixture(t);
+  await symlink(join(outside, 'source.txt'), join(root, '.canon/auth/session.json'));
+  const escaping = await configApi.doctorHarness(root);
+  assert.equal(escaping.ok, false); assert.match(escaping.errors.join(' '), /storageState.*symlink/);
+  await rm(join(root, '.canon/auth/session.json'));
+  await mkdir(join(root, '.canon/auth/session.json'));
+  assert.match((await configApi.doctorHarness(root)).errors.join(' '), /storageState.*file/);
+});
+
+for (const linked of [false, true]) test(`ignored storage-state ${linked ? 'symlink target' : 'file'} changes invalidate prior evidence without exposing cookie bytes`, async t => {
+  const { symlink } = await import('node:fs/promises');
+  const config: any = base(); config.app = { url: 'http://localhost:3000', storageState: '.canon/auth/session.json' };
+  config.checks = [{ id: 'ok', command: [process.execPath, '-e', 'process.exit(0)'] }]; config.completion.requiredChecks = ['ok'];
+  const root = await fixture(t, config);
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  await writeFile(join(root, '.gitignore'), '.canon/auth/\n');
+  await mkdir(join(root, '.canon/auth'), { recursive: true });
+  const target = join(root, '.canon/auth', linked ? 'target.json' : 'session.json');
+  const secret = 'private-session-value-do-not-report';
+  await writeFile(target, JSON.stringify({ cookies: [{ name: 'session', value: secret }], origins: [] }));
+  if (linked) await symlink('target.json', join(root, '.canon/auth/session.json'));
+  const result = await core.verifyHarness(root);
+  assert.equal(result.ready, true);
+  for (const file of ['report.json', 'report.html', 'report.md', 'manifest.json']) assert.ok(!(await readFile(join(result.runDir, file), 'utf8')).includes(secret));
+  await writeFile(target, JSON.stringify({ cookies: [{ name: 'session', value: 'refreshed-session' }], origins: [] }));
+  const stale = await reports.readHarnessReport(root);
+  assert.equal(stale.stale, true); assert.equal(stale.ready, false);
+});

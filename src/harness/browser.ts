@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { CaptureCallback, CaptureResult } from './types.ts';
+import { storageStatePath } from './config.ts';
 
 /** Use the application's installed browser tooling. Only a source checkout has a fallback. */
 export async function resolvePlaywright(root: string): Promise<any> {
@@ -45,6 +46,7 @@ export const captureScenarios: CaptureCallback = async ({ root, config, runDir, 
   let launchError: string | undefined;
   try {
     signal?.throwIfAborted();
+    const storageState = config.app.storageState ? await storageStatePath(root, config.app.storageState) : undefined;
     if (!await reachable(config.app.url, signal)) {
       if (!config.app.start) throw new Error(`Application is unreachable at ${config.app.url}. Start it yourself or configure app.start.`);
       owned = spawn(config.app.start[0], config.app.start.slice(1), {cwd:root,stdio:'ignore',detached:process.platform !== 'win32',shell:false});
@@ -79,7 +81,13 @@ export const captureScenarios: CaptureCallback = async ({ root, config, runDir, 
         let context: any;
         try {
           signal?.throwIfAborted();
-          context = await browser.newContext({viewport:{width:viewport.width,height:viewport.height},colorScheme:scenario.colorScheme ?? 'light',reducedMotion:'reduce',locale:'en-US',timezoneId:'UTC'});
+          try {
+            context = await browser.newContext({viewport:{width:viewport.width,height:viewport.height},colorScheme:scenario.colorScheme ?? 'light',reducedMotion:'reduce',locale:'en-US',timezoneId:'UTC',storageState});
+          } catch (error) {
+            // Playwright/JSON errors can include session values. Keep that input out of reports.
+            if (storageState) throw new Error(`Cannot create browser context using app.storageState ${config.app.storageState}. Check that the file contains valid Playwright storage state JSON and that Chromium is available.`);
+            throw error;
+          }
           const page = await context.newPage();
           const errors: string[] = [];
           page.on('pageerror', (error: Error) => errors.push(error.message));

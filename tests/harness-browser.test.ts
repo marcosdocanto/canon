@@ -44,3 +44,42 @@ test('font readiness is bounded by the configured application timeout',async t=>
  const results=await captureScenarios({root,runDir,signal:controller.signal,config:{schemaVersion:1,context:{documents:[],skills:[]},checks:[],completion:{requiredChecks:[],requiredScenarios:['home']},app:{url:`http://127.0.0.1:${(server.address() as any).port}`,readyTimeoutMs:1500},scenarios:[scenario]}});
  assert.equal(results[0].status,'failed');assert.match(results[0].error!,/font readiness exceeded \d+ms/i);
 });
+
+test('stored session captures a cookie-gated route in each isolated viewport; absent session fails the authenticated selector', async t => {
+  const { verifyHarness } = await import('../src/harness/runner.ts');
+  const { readFileSync } = await import('node:fs');
+  const root = fixture(t);
+  const sessionValue = 'private-browser-cookie-do-not-report';
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(req.headers.cookie?.includes(`session=${sessionValue}`) ? '<main data-authenticated>Private dashboard</main>' : '<main>Sign in</main>');
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const url = `http://127.0.0.1:${(server.address() as any).port}`;
+  mkdirSync(join(root, '.canon/auth'), { recursive: true });
+  writeFileSync(join(root, '.canon/auth/session.json'), JSON.stringify({ cookies: [{ name: 'session', value: sessionValue, domain: '127.0.0.1', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' }], origins: [] }));
+  const config = { schemaVersion: 1, context: { documents: [], skills: [] }, checks: [], completion: { requiredChecks: [], requiredScenarios: ['dashboard'] }, app: { url, readyTimeoutMs: 1200, storageState: '.canon/auth/session.json' }, scenarios: [{ id: 'dashboard', path: '/', readySelector: '[data-authenticated]', viewports: [{ name: 'desktop', width: 800, height: 600 }, { name: 'phone', width: 390, height: 844 }] }] };
+  writeFileSync(join(root, 'canon.config.json'), JSON.stringify(config));
+  const authenticated = await verifyHarness(root, { capture: captureScenarios });
+  assert.equal(authenticated.ready, true, JSON.stringify(authenticated.errors));
+  assert.deepEqual(authenticated.captures.map(c => c.status), ['captured', 'captured']);
+  for (const capture of authenticated.captures) assert.ok(existsSync(join(authenticated.runDir, capture.path!)));
+  for (const name of ['report.json', 'report.html', 'report.md', 'manifest.json']) assert.ok(!readFileSync(join(authenticated.runDir, name), 'utf8').includes(sessionValue));
+  const { storageState, ...unauthenticatedApp } = config.app;
+  writeFileSync(join(root, 'canon.config.json'), JSON.stringify({ ...config, app: unauthenticatedApp }));
+  const unauthenticated = await verifyHarness(root, { capture: captureScenarios });
+  assert.equal(unauthenticated.ready, false);
+  assert.deepEqual(unauthenticated.captures.map(c => c.status), ['failed', 'failed']);
+  for (const capture of unauthenticated.captures) assert.match(capture.error!, /data-authenticated/);
+});
+
+test('invalid storage-state capture errors never echo session file contents', async t => {
+  const root = fixture(t); const runDir = join(root, 'run'); mkdirSync(runDir);
+  const secret = 'session-value-hidden-even-on-parse-failure';
+  writeFileSync(join(root, 'session.json'), `{\"secret\":\"${secret}\", BROKEN`);
+  const server = createServer((req, res) => res.end('<h1>Page</h1>'));
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const results = await captureScenarios({ root, runDir, config: { schemaVersion: 1, context: { documents: [], skills: [] }, checks: [], completion: { requiredChecks: [], requiredScenarios: ['home'] }, app: { url: `http://127.0.0.1:${(server.address() as any).port}`, storageState: 'session.json' }, scenarios: [scenario] } });
+  assert.equal(results[0].status, 'failed'); assert.match(results[0].error!, /storageState/);
+  assert.ok(!JSON.stringify(results).includes(secret));
+});
