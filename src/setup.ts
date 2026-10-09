@@ -24,8 +24,8 @@ It copies the skill included in this Canon version, so it survives npm cache
 cleanup. Run setup again to update that copy; it does not update automatically.
 
 After installation, reload your agent if needed and ask it to use Canon:
-  Existing project: connect this shadcn/ui project; preserve its components and theme.
-  New project: build a local app in a new folder with shadcn/ui.
+  Existing project: configure design context, checks and browser evidence; preserve the stack.
+  New project: build the requested local app and configure its verification contract.
 
 Setup installs the entry skill only. Your agent connects the project when asked;
 setup does not initialize a library, change its theme or rebuild the app.

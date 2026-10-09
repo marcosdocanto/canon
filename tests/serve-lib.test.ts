@@ -16,6 +16,7 @@ import { adopt } from '../src/adopt.ts';
 import { createSystem, writeDesignDir } from '../src/system.ts';
 import { buildSystem } from '../src/build.ts';
 import { libHandler } from '../src/serve-lib.ts';
+import { checkLib } from '../src/build-lib.ts';
 import { findProject } from '../src/project.ts';
 import { clone } from './fixtures/clone.ts';
 
@@ -364,6 +365,7 @@ test('POST /api/lib/save rejects a non-POST method', async (t) => {
 
 test('POST /api/lib/save writes theme + variant changes in one atomic transaction and returns fresh state', async (t) => {
   const f = await libFixture(t);
+  writeFileSync(join(f.root, 'AGENTS.md'), 'Team header\n<!-- canon:start -->\nOld context\n<!-- canon:end -->\nTeam footer\n');
   const state = (await f.request('/api/lib/state')).json();
   const button = state.components.find((c: any) => c.slug === 'button');
   const themeFile = join(f.root, 'app', 'globals.css');
@@ -406,6 +408,35 @@ test('POST /api/lib/save writes theme + variant changes in one atomic transactio
   const designMd = readFileSync(join(f.design, 'dist', 'DESIGN.md'), 'utf8');
   assert.match(designMd, /#123456/);
   assert.match(designMd, /#abcdef/);
+  assert.match(readFileSync(join(f.root, 'DESIGN.md'), 'utf8'), /#123456/);
+  for (const [target, source] of [
+    ['DESIGN.compact.md', 'DESIGN.compact.md'],
+    ['.claude/skills/design-system/SKILL.md', 'agents/SKILL.md'],
+    ['.cursor/rules/design-system.mdc', 'agents/design-system.mdc'],
+  ]) assert.equal(readFileSync(join(f.root, target), 'utf8'), readFileSync(join(f.dist, source), 'utf8'));
+  assert.match(readFileSync(join(f.root, 'CLAUDE.md'), 'utf8'), /<!-- canon:start -->/);
+  const agents = readFileSync(join(f.root, 'AGENTS.md'), 'utf8');
+  assert.ok(agents.startsWith('Team header\n<!-- canon:start -->'));
+  assert.ok(agents.endsWith('<!-- canon:end -->\nTeam footer\n'));
+  assert.doesNotMatch(agents, /Old context/);
+  assert.equal(checkLib(f.root, f.design).ok, true);
+});
+
+test('a blocked root reference prevents Save from changing source, dist or stories', async t => {
+  const f = await libFixture(t);
+  const state = (await f.request('/api/lib/state')).json();
+  const paths = [state.theme.file, join(f.dist, 'DESIGN.md'), join(f.dist, 'canon.library.lock.json'), join(f.root, 'stories/canon/button.stories.tsx')];
+  const before = paths.map(path => readFileSync(path));
+  const reference = join(f.root, 'DESIGN.compact.md');
+  rmSync(reference);
+  mkdirSync(reference);
+  const theme = { ...state.theme, vars: { ...state.theme.vars, primary: { light: '#123456' } } };
+  const response = await f.request('/api/lib/save', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ theme, hashes: state.hashes }),
+  });
+  assert.equal(response.status, 409);
+  paths.forEach((path, index) => assert.deepEqual(readFileSync(path), before[index], path));
 });
 
 test('POST /api/lib/save applies a part edit (dialog, no cva at all), byte-identical everywhere except the spliced literal', async (t) => {

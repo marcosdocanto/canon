@@ -1,7 +1,10 @@
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync, realpathSync } from 'node:fs';
 import { join, relative, extname, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import type { System, ResolvedToken } from './types.ts';
+import { findProject } from './project.ts';
+import { getAdapter } from './adapters/index.ts';
+import { knownFromLibrary } from './library-context.ts';
 import { indexTokens } from './tokens/resolve.ts';
 import { parseCssColor, distance } from './color.js';
 
@@ -381,8 +384,10 @@ export function lintSource(known: Known, file: string, content: string, opts: { 
 }
 
 export async function runLint(system: System, designDir: string, opts: { paths?: string[]; root: string; changed?: boolean }): Promise<LintResult> {
-  const idx = indexTokens(system.tokens, system.meta.prefix);
-  const known = knownFromSystem(system, idx);
+  const canonical = realpathSync(designDir);
+  const project = [findProject(opts.root), findProject(designDir)].find(p => p && realpathSync(p.design) === canonical);
+  const adapter = project?.adapter ? getAdapter(project.adapter) : undefined;
+  const known = adapter ? knownFromLibrary(adapter.readTheme(project!.root), adapter, system.meta.prefix) : knownFromSystem(system, indexTokens(system.tokens, system.meta.prefix));
   const exclude = [...system.meta.lint.exclude, 'node_modules', '.git'].map((e) => new RegExp(`(^|/)${e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(/|$)`));
   const allow = system.meta.lint.allow.map(globToRe);
   const designAbs = resolve(designDir);
@@ -406,7 +411,7 @@ export async function runLint(system: System, designDir: string, opts: { paths?:
   const violations: Violation[] = [];
   for (const f of files) {
     const content = readFileSync(f, 'utf8');
-    for (const v of lintSource(known, f, content, { tailwind: system.meta.lint.tailwind })) violations.push({ ...v, file: relative(opts.root, f) || f });
+    for (const v of lintSource(known, f, content, { tailwind: system.meta.lint.tailwind, native: !adapter })) violations.push({ ...v, file: relative(opts.root, f) || f });
   }
   violations.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.col - b.col);
   return { files: files.length, violations, summary: { errors: violations.filter((v) => v.severity === 'error').length, warnings: violations.filter((v) => v.severity === 'warn').length } };

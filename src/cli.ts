@@ -41,6 +41,13 @@ const designDir = () => {
 const HELP = `canon ${VERSION} — the design harness for coding agents.
 
 Usage
+  canon harness init [--apply] [--url <url>] [--root .]
+                                           Configure checks and browser evidence in any web project (preview by default)
+  canon harness doctor [--json] [--root .]   Inspect the project verification contract
+  canon harness mcp [--root .]             Read-only policy, doctor and evidence MCP server
+  canon verify [--json] [--root .]          Execute configured checks and browser captures
+  canon report [run-id] [--json|--format markdown|html] [--root .]
+                                           Read and revalidate recorded evidence
   canon setup [--agent <agents...>] [--global] [--root .] [--yes]
                                            Install the included Canon entry skill for your coding agent
   canon connect <studio-url|snapshot.json> [--root .] [--design design] [--no-hooks]
@@ -83,6 +90,13 @@ Examples
 
 async function main() {
   switch (cmd) {
+    case 'harness':
+    case 'verify':
+    case 'report': {
+      const { runHarnessCommand } = await import('./harness/commands.ts');
+      process.exitCode = await runHarnessCommand(cmd, args.slice(1));
+      return;
+    }
     case 'setup': {
       const { setup } = await import('./setup.ts');
       process.exitCode = setup(args.slice(1));
@@ -229,7 +243,7 @@ async function main() {
         build = checkBuild(system, dir);
       }
       let ok = build.ok;
-      if (build.ok) console.log(project?.adapter ? '✓ dist is up to date (theme + inventory unchanged since last build)' : '✓ dist is up to date (all generators and file hashes verified)');
+      if (build.ok) console.log(project?.adapter ? '✓ dist is up to date (source and generated references verified)' : '✓ dist is up to date (all generators and file hashes verified)');
       else {
         for (const issue of build.issues) console.log(`✗ ${issue}`);
         console.log('  Run `canon build` to rebuild all artifacts.');
